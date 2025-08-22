@@ -1,0 +1,5 @@
+<library path="compliant_controllers">
+  <class name="compliant_controllers/CartesianImpedanceController" type="compliant_controllers::CartesianImpedanceController" base_class_type="controller_interface::ControllerInterface">
+    <description>Placeholder Cartesian impedance controller.</description>
+  </class>
+</library>
