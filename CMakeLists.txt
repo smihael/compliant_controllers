@@ -21,9 +21,10 @@ find_package(rclcpp_lifecycle REQUIRED)
 find_package(realtime_tools REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(robot_module_msgs REQUIRED)
+find_package(compliant_controllers_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(pinocchio REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 
 # Robot model implementation library (encapsulates pinocchio usage)
 add_library(robot_model_impl SHARED
@@ -39,9 +40,25 @@ ament_target_dependencies(robot_model_impl
   pinocchio
 )
 
-# Main controller library (depends on robot_model_impl)
+add_library(cartesian_impedance_impl SHARED
+  src/cartesian_impedance_impl.cpp
+)
+
+target_include_directories(cartesian_impedance_impl PUBLIC
+  include
+  ${EIGEN3_INCLUDE_DIRS}
+)
+
+# Keep this implementation library minimal; only link required internal and math deps.
+target_link_libraries(cartesian_impedance_impl
+  PUBLIC robot_model_impl
+)
+if(UNIX)
+  target_link_libraries(cartesian_impedance_impl PRIVATE dl)
+endif()
+
 add_library(${PROJECT_NAME} SHARED
-  src/cartesian_impedance_controller.cpp
+  src/generic_cartesian_controller_wrapper.cpp 
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -60,16 +77,22 @@ ament_target_dependencies(${PROJECT_NAME}
   realtime_tools
   std_srvs
   sensor_msgs
-  robot_module_msgs
+  compliant_controllers_msgs
   pinocchio # transitively for interface if needed (Jacobian types)
+  ament_index_cpp
 )
 
-# Link controller with robot_model_impl via plain signature consistent with ament_target_dependencies usage
- target_link_libraries(${PROJECT_NAME} robot_model_impl)
+# Standalone implementation library exposing factory symbols for dynamic loading
+
+# Link wrapper with implementation libs
+target_link_libraries(${PROJECT_NAME} cartesian_impedance_impl robot_model_impl)
+if(UNIX)
+  target_link_libraries(${PROJECT_NAME} dl)
+endif()
 
 pluginlib_export_plugin_description_file(controller_interface compliant_controllers.xml)
 
-install(TARGETS robot_model_impl ${PROJECT_NAME}
+install(TARGETS robot_model_impl cartesian_impedance_impl ${PROJECT_NAME}
   EXPORT export_${PROJECT_NAME}
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
@@ -101,7 +124,7 @@ install(
 )
 
 ament_export_include_directories(include)
-ament_export_libraries(${PROJECT_NAME} robot_model_impl)
-ament_export_dependencies(controller_interface pluginlib rclcpp rclcpp_lifecycle hardware_interface pinocchio)
+ament_export_libraries(${PROJECT_NAME} cartesian_impedance_impl robot_model_impl)
+ament_export_dependencies(controller_interface pluginlib rclcpp rclcpp_lifecycle hardware_interface pinocchio ament_index_cpp)
 
 ament_package()

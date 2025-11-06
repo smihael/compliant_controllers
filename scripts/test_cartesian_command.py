@@ -2,7 +2,7 @@
 import math
 import rclpy
 from rclpy.node import Node
-from robot_module_msgs.msg import CartesianCommand
+from compliant_controllers_msgs.msg import CartesianCommand
 from tf2_ros import Buffer, TransformListener
 from geometry_msgs.msg import TransformStamped
 
@@ -60,16 +60,16 @@ class TestCartesianCommand(Node):
 
         cmd = CartesianCommand()
         # Current pose target with offsets
-        cmd.pose_des.position.x = tf.transform.translation.x + dx
-        cmd.pose_des.position.y = tf.transform.translation.y + dy
-        cmd.pose_des.position.z = tf.transform.translation.z + dz
-        cmd.pose_des.orientation = tf.transform.rotation  # keep orientation
-        cmd.velocity_des.linear.x = 0.0
-        cmd.velocity_des.linear.y = 0.0
-        cmd.velocity_des.linear.z = 0.0
-        cmd.velocity_des.angular.x = 0.0
-        cmd.velocity_des.angular.y = 0.0
-        cmd.velocity_des.angular.z = 0.0
+        cmd.pose.position.x = tf.transform.translation.x + dx
+        cmd.pose.position.y = tf.transform.translation.y + dy
+        cmd.pose.position.z = tf.transform.translation.z + dz
+        cmd.pose.orientation = tf.transform.rotation  # keep orientation
+        cmd.velocity.linear.x = 0.0
+        cmd.velocity.linear.y = 0.0
+        cmd.velocity.linear.z = 0.0
+        cmd.velocity.angular.x = 0.0
+        cmd.velocity.angular.y = 0.0
+        cmd.velocity.angular.z = 0.0
         cmd.wrench_ff.force.x = 0.0
         cmd.wrench_ff.force.y = 0.0
         cmd.wrench_ff.force.z = 0.0

@@ -3,7 +3,7 @@ import math
 import rclpy
 from rclpy.node import Node
 from rcl_interfaces.msg import ParameterDescriptor
-from robot_module_msgs.msg import CartesianCommand
+from compliant_controllers_msgs.msg import CartesianCommand
 from tf2_ros import Buffer, TransformListener
 
 class DirectionalImpedanceDemo(Node):
@@ -96,17 +96,17 @@ class DirectionalImpedanceDemo(Node):
         angle_rad = math.radians(angle_deg)
         cmd = CartesianCommand()
         # Position target: keep XY, apply optional dz offset
-        cmd.pose_des.position.x = tf.transform.translation.x
-        cmd.pose_des.position.y = tf.transform.translation.y
-        cmd.pose_des.position.z = tf.transform.translation.z + dz
-        cmd.pose_des.orientation = tf.transform.rotation
+        cmd.pose.position.x = tf.transform.translation.x
+        cmd.pose.position.y = tf.transform.translation.y
+        cmd.pose.position.z = tf.transform.translation.z + dz
+        cmd.pose.orientation = tf.transform.rotation
         # Zero velocity / wrench
-        cmd.velocity_des.linear.x = 0.0
-        cmd.velocity_des.linear.y = 0.0
-        cmd.velocity_des.linear.z = 0.0
-        cmd.velocity_des.angular.x = 0.0
-        cmd.velocity_des.angular.y = 0.0
-        cmd.velocity_des.angular.z = 0.0
+        cmd.velocity.linear.x = 0.0
+        cmd.velocity.linear.y = 0.0
+        cmd.velocity.linear.z = 0.0
+        cmd.velocity.angular.x = 0.0
+        cmd.velocity.angular.y = 0.0
+        cmd.velocity.angular.z = 0.0
         cmd.wrench_ff.force.x = 0.0
         cmd.wrench_ff.force.y = 0.0
         cmd.wrench_ff.force.z = 0.0
