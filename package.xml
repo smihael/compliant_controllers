@@ -3,15 +3,13 @@
 <package format="3">
   <name>compliant_controllers</name>
   <version>0.0.1</version>
-  <description>Example compliant controllers (joint and cartesian impedance style) using ros2_control.</description>
+  <description>Compliant controllers for ROS2 with message based plugin infrastructure.</description>
   <maintainer email="smihael@gmail.com">Mihael Simonic</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>controller_interface</depend>
-  <depend>franka_msgs</depend>
-  <depend>franka_semantic_components</depend>
   <depend>hardware_interface</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
@@ -20,7 +18,7 @@
   <depend>std_srvs</depend>
   <depend>compliant_controllers_msgs</depend>
   <depend>sensor_msgs</depend>
-  <depend>Eigen3</depend>
+  <depend>eigen</depend>
 
   <depend>pinocchio</depend>
 

@@ -95,6 +95,7 @@ class DirectionalImpedanceDemo(Node):
 
         angle_rad = math.radians(angle_deg)
         cmd = CartesianCommand()
+        cmd.header.stamp = self.get_clock().now().to_msg()
         # Position target: keep XY, apply optional dz offset
         cmd.pose.position.x = tf.transform.translation.x
         cmd.pose.position.y = tf.transform.translation.y

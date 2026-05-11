@@ -15,7 +15,7 @@ public:
 
   static constexpr const char* kName = "CartesianImpedanceImpl";
 
-  explicit CartesianImpedanceImpl(int num_joints = 7);
+  explicit CartesianImpedanceImpl(int num_joints);
   ~CartesianImpedanceImpl() override = default;
 
   bool step(const control::ControlCommand& command,
@@ -29,15 +29,15 @@ public:
 private:
   // Helpers
   Eigen::Vector3d q_log(const Eigen::Quaterniond &q) const;
-  void pseudoInverse(const Eigen::MatrixXd &M, Eigen::MatrixXd &M_pinv, double tolerance = 1e-6) const;
 
   int num_joints_;
 
   // Robot model and buffers
   RobotModel* robot_model_{nullptr};
 
-  Eigen::Matrix<double,6,Eigen::Dynamic> J_;
-  Eigen::MatrixXd pinv_Jt_;
+  Eigen::Matrix<double,6,Eigen::Dynamic> J_;          // 6 x n Jacobian
+  Eigen::Matrix<double,Eigen::Dynamic,6> J_pinv_;     // n x 6 pseudo-inverse J^+ provided by RobotModel
+  Eigen::MatrixXd I_n_;                               // n x n identity for nullspace projection
   Eigen::Vector3d p_;
   Eigen::Quaterniond q_;
 

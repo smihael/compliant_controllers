@@ -1,0 +1,99 @@
+# UR10e Classic Gazebo Controller Configuration
+# Using classic Gazebo (not Ignition/Gz) to enable effort command interface
+# for cartesian impedance control.
+
+/controller_manager:
+  ros__parameters:
+    update_rate: 500  # Hz (UR robots typically use lower rates than Franka)
+    # Pass robot_description to controller_manager so controllers can access it locally
+    robot_description: ''  # Will be overridden by controller_manager from gazebo_ros2_control
+    
+    cartesian_impedance_controller:
+      type: compliant_controllers/GenericCartesianControllerWrapper
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    ur10e_arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
+/cartesian_impedance_controller:
+  ros__parameters:
+    arm_id: ur10e
+    init_k_pos: 150.0  # Increased for better stability
+    init_k_ori: 10.0   # Increased for better stability
+    base_frame: base_link
+    ee_frame: tool0  # UR robots use 'tool0' as end-effector frame
+    add_gravity_compensation: true  # UR robots need explicit gravity compensation (Franka does it in hardware)
+    robot_description_node: robot_state_publisher
+    robot_description_param: robot_description
+    impl_library: libcartesian_impedance_impl.so
+    # List of joint names (supports both Franka and UR naming)
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_joint
+      - wrist_1_joint
+      - wrist_2_joint
+      - wrist_3_joint
+    # Also try to get robot_description locally if available
+    robot_description: ''
+
+
+/ur10e_arm_controller:
+  ros__parameters:
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_joint
+      - wrist_1_joint
+      - wrist_2_joint
+      - wrist_3_joint
+    command_interfaces:
+      - effort
+    state_interfaces:
+      - position
+      - velocity
+    gains:
+      shoulder_pan_joint: { p: 2000., d: 100., i: 0., i_clamp: 1. }
+      shoulder_lift_joint: { p: 2000., d: 100., i: 0., i_clamp: 1. }
+      elbow_joint: { p: 1500., d: 75., i: 0., i_clamp: 1. }
+      wrist_1_joint: { p: 500., d: 25., i: 0., i_clamp: 1. }
+      wrist_2_joint: { p: 500., d: 25., i: 0., i_clamp: 1. }
+      wrist_3_joint: { p: 500., d: 25., i: 0., i_clamp: 1. }
+    allow_partial_joints_goal: false
+    action_monitor_rate: 20.0
+    state_publish_rate: 50.0
+    interpolation_method: splines
+    constraints:
+      stopped_velocity_tolerance: 0.02
+      goal_time: 0.0
+
+joint_trajectory_controller:
+  ros__parameters:
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_joint
+      - wrist_1_joint
+      - wrist_2_joint
+      - wrist_3_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 100.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false
+    constraints:
+      stopped_velocity_tolerance: 0.2
+      goal_time: 0.0
+      shoulder_pan_joint: { trajectory: 0.2, goal: 0.1 }
+      shoulder_lift_joint: { trajectory: 0.2, goal: 0.1 }
+      elbow_joint: { trajectory: 0.2, goal: 0.1 }
+      wrist_1_joint: { trajectory: 0.2, goal: 0.1 }
+      wrist_2_joint: { trajectory: 0.2, goal: 0.1 }
+      wrist_3_joint: { trajectory: 0.2, goal: 0.1 }
+

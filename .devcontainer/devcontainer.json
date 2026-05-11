@@ -1,0 +1,24 @@
+{
+  "name": "compliant_controllers (ROS 2 Humble)",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "controllers",
+  "workspaceFolder": "/home/user/controllers_ws",
+  "remoteUser": "user",
+  "containerEnv": {
+    "ROS_DISTRO": "humble"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-iot.vscode-ros",
+        "ms-python.python",
+        "ms-vscode.cpptools",
+        "twxs.cmake"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+  "postCreateCommand": "bash /home/user/controllers_ws/src/compliant_controllers/.devcontainer/post-create.sh"
+}

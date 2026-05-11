@@ -1,0 +1,1 @@
+{"name":"Franka Hand with default configuration","inertial":{"mass":0.73,"centerOfMass":{"x":-0.01,"y":0,"z":0.03},"inertia":{"x11":0.001,"x12":0,"x13":0,"x22":0.0025,"x23":0,"x33":0.0017}},"tcp":{"rotation":{"pitch":0,"roll":0,"yaw":-0.7853981633974483},"translation":{"x":0,"y":0,"z":0.1034}},"deviceId":"ee-gripper"}

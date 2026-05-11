@@ -34,7 +34,7 @@ public:
 #define FACTORY_EXPORT_CONTROLLER(Type) \
     extern "C" { \
         static_assert(std::is_base_of<control::AbstractController, Type>::value, "Type must derive from control::AbstractController"); \
-        control::AbstractController* create_controller() { return new Type(); } \
+        control::AbstractController* create_controller(int num_joints) { return new Type(num_joints); } \
         void destroy_controller(control::AbstractController* c) { delete c; } \
         const char* controller_name() { return Type::kName; } \
     }

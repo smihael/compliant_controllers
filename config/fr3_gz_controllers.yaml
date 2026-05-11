@@ -1,0 +1,64 @@
+/controller_manager:
+  ros__parameters:
+    update_rate: 1000  # Hz
+    cartesian_impedance_controller:
+      type: compliant_controllers/GenericCartesianControllerWrapper
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    fr3_arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
+/cartesian_impedance_controller:
+  ros__parameters:
+    arm_id: fr3
+    init_k_pos: 200.0
+    init_k_ori: 10.0
+    ee_frame: fr3_link8
+    robot_description_node: robot_state_publisher
+    robot_description_param: robot_description
+    end_effector_profile_node: end_effector_profile_server
+    add_gravity_compensation: true
+    compensate_end_effector_load: false
+    impl_library: libcartesian_impedance_impl.so
+    joints:
+      - fr3_joint1
+      - fr3_joint2
+      - fr3_joint3
+      - fr3_joint4
+      - fr3_joint5
+      - fr3_joint6
+      - fr3_joint7
+
+/fr3_arm_controller:
+  ros__parameters:
+    joints:
+      - fr3_joint1
+      - fr3_joint2
+      - fr3_joint3
+      - fr3_joint4
+      - fr3_joint5
+      - fr3_joint6
+      - fr3_joint7
+    command_interfaces:
+      - effort
+    state_interfaces:
+      - position
+      - velocity
+    gains:
+      fr3_joint1: { p: 600., d: 30., i: 0., i_clamp: 1. }
+      fr3_joint2: { p: 600., d: 30., i: 0., i_clamp: 1. }
+      fr3_joint3: { p: 600., d: 30., i: 0., i_clamp: 1. }
+      fr3_joint4: { p: 600., d: 30., i: 0., i_clamp: 1. }
+      fr3_joint5: { p: 250., d: 10., i: 0., i_clamp: 1. }
+      fr3_joint6: { p: 150., d: 10., i: 0., i_clamp: 1. }
+      fr3_joint7: { p: 50., d: 5., i: 0., i_clamp: 1. }
+    allow_partial_joints_goal: false
+    action_monitor_rate: 20.0
+    state_publish_rate: 50.0
+    interpolation_method: splines
+    constraints:
+      stopped_velocity_tolerance: 0.02
+      goal_time: 0.0

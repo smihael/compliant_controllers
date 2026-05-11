@@ -1,5 +1,17 @@
 #include <compliant_controllers/cartesian_impedance_impl.hpp>
 #include <iostream>
+#include <cmath>
+
+namespace {
+bool allFinite(const Eigen::VectorXd& v) {
+  return v.array().isFinite().all();
+}
+
+template <typename Derived>
+bool allFiniteMat(const Eigen::MatrixBase<Derived>& m) {
+  return m.array().isFinite().all();
+}
+}  // namespace
 
 using control::ControlCommand;
 
@@ -7,7 +19,9 @@ namespace compliant_controllers {
 
 CartesianImpedanceImpl::CartesianImpedanceImpl(int num_joints) : num_joints_(num_joints) {
   J_.resize(6, num_joints_);
-  pinv_Jt_.resize(num_joints_, 6); // will store pseudo-inverse of J^T (num_joints x 6)
+  J_pinv_.resize(num_joints_, 6); 
+  I_n_.resize(num_joints_, num_joints_);
+  I_n_.setIdentity();
 
   // Print in green using ANSI escape sequence
   std::cout << "\033[32mUsing " << kName << " compiled at " << __DATE__ << ", " << __TIME__ << "\033[0m" << std::endl;
@@ -26,25 +40,49 @@ Eigen::Vector3d CartesianImpedanceImpl::q_log(const Eigen::Quaterniond &q) const
   return angle * axis / 2.0;
 }
 
-void CartesianImpedanceImpl::pseudoInverse(const Eigen::MatrixXd &M, Eigen::MatrixXd &M_pinv, double tolerance) const {
-  Eigen::JacobiSVD<Eigen::MatrixXd> svd(M, Eigen::ComputeThinU | Eigen::ComputeThinV);
-  double tol = tolerance * std::max(M.cols(), M.rows()) * svd.singularValues().array().abs()(0);
-  Eigen::VectorXd singular_inv = svd.singularValues();
-  for (int i = 0; i < singular_inv.size(); ++i) {
-    singular_inv(i) = (singular_inv(i) > tol) ? 1.0 / singular_inv(i) : 0.0;
-  }
-  M_pinv = svd.matrixV() * singular_inv.asDiagonal() * svd.matrixU().transpose();
-}
 
 bool CartesianImpedanceImpl::step(const ControlCommand& command,
                                   const control::ControllerState& current_state,
                                   Eigen::Ref<Eigen::VectorXd> control_output,
                                   double /*dt*/) {
 
-  // Update model and retrieve Jacobian & pose
-  robot_model_->update(current_state.q);
-  robot_model_->getJacobian(J_);
-  //robot_model_->getCoriolis(coriolis_);
+  if (control_output.size() != num_joints_) {
+    std::cerr << "[CartesianImpedanceImpl::step] control_output size mismatch: expected "
+              << num_joints_ << ", got " << control_output.size() << std::endl;
+    return false;
+  }
+
+  if (robot_model_ == nullptr) {
+    std::cerr << "[CartesianImpedanceImpl] robot_model_ is null, skipping step" << std::endl;
+    control_output.setZero();
+    return false;
+  }
+
+  if (current_state.q.size() != num_joints_ || current_state.dq.size() != num_joints_ ||
+      !allFinite(current_state.q) || !allFinite(current_state.dq) ||
+      !allFiniteMat(command.position) || !allFiniteMat(command.velocity) ||
+      !allFiniteMat(command.wrench) || !allFiniteMat(command.stiffness) ||
+      !allFiniteMat(command.damping)) {
+    std::cerr << "[CartesianImpedanceImpl::step] Invalid state/command input (size or non-finite)."
+              << " q_size=" << current_state.q.size()
+              << " dq_size=" << current_state.dq.size()
+              << " expected=" << num_joints_ << std::endl;
+    control_output.setZero();
+    return false;
+  }
+
+  // Wrapper already updated robot model with current_state.q; fetch Jacobian and J^+.
+  if (!robot_model_->getJacobianAndPseudoInverse(J_, J_pinv_, 1e-6)) {
+    std::cerr << "[CartesianImpedanceImpl::step] Failed to get Jacobian/pseudo-inverse for current state." << std::endl;
+    control_output.setZero();
+    return false;
+  }
+  if (!allFiniteMat(J_) || !allFiniteMat(J_pinv_)) {
+    std::cerr << "[CartesianImpedanceImpl::step] Non-finite Jacobian/pseudo-inverse detected." << std::endl;
+    control_output.setZero();
+    return false;
+  }
+  // robot_model_->getCoriolis(coriolis_);
 
   // Build error vector
   Eigen::Matrix<double, 6, 1> error = Eigen::Matrix<double,6,1>::Zero();
@@ -55,22 +93,29 @@ bool CartesianImpedanceImpl::step(const ControlCommand& command,
 
   Eigen::Matrix<double,6,1> vel_error = J_*current_state.dq - command.velocity;
 
-  // Pseudo inverse of J^T for nullspace projection (J: 6 x n) -> (J^T)^+ : n x 6
-  pseudoInverse(J_.transpose(), pinv_Jt_);
 
   Eigen::VectorXd tau_task = J_.transpose() * (-command.stiffness * error - command.damping * vel_error);
   Eigen::VectorXd tau_ft_added = J_.transpose() * command.wrench;
-  Eigen::VectorXd tau_nullspace = (Eigen::MatrixXd::Identity(num_joints_, num_joints_) - J_.transpose() * pinv_Jt_) *
-      (command.k_ns.array() * (command.q_ns_des - current_state.q).array()).matrix();
+  
 
-  // CHECK!!
-  if (tau_nullspace.norm() > TAU_NULLSPACE_MAX_) {
-    tau_nullspace = tau_nullspace * TAU_NULLSPACE_MAX_ / tau_nullspace.norm();
+  Eigen::VectorXd tau_ns = Eigen::VectorXd::Zero(num_joints_);
+  if (command.q_ns_des.size() == num_joints_ && command.k_ns.size() == num_joints_) {
+    Eigen::VectorXd d_ns = Eigen::VectorXd::Zero(num_joints_);
+    if (command.d_ns.size() == num_joints_) {
+      d_ns = command.d_ns;
+    }
+    const Eigen::VectorXd tau_ns_raw =
+      (command.k_ns.array() * (command.q_ns_des - current_state.q).array()).matrix()
+      - (d_ns.array() * current_state.dq.array()).matrix();
+    tau_ns = (I_n_ - J_.transpose() * J_pinv_.transpose()).lazyProduct(tau_ns_raw);
+    double ns_norm = tau_ns.norm();
+    if (ns_norm > TAU_NULLSPACE_MAX_) {
+      tau_ns *= (TAU_NULLSPACE_MAX_ / ns_norm);
+    }
   }
 
   if (control_output.size() == num_joints_) {
-    //control_output = tau_task + tau_nullspace + coriolis + tau_ft_added;
-    control_output = tau_task + tau_ft_added;
+    control_output.noalias() = tau_task + tau_ft_added + tau_ns; // + coriolis
   }
   return true;
 }

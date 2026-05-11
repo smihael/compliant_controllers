@@ -19,11 +19,13 @@ public:
   RobotModel(const RobotModel&) = delete;
   RobotModel& operator=(const RobotModel&) = delete;
 
-  // Build model from URDF XML string. Optionally specify preferred end-effector frame name (ee_hint).
+  // Build model from URDF XML string. Optionally specify preferred end-effector frame name (ee_hint)
+  // and the actuated joints used by the controller.
   // If ee_hint empty or not found, heuristics are applied; returns false on failure.
-  bool init(const std::string& urdf_xml, const std::string& ee_hint = "");
+  bool init(const std::string& urdf_xml, const std::string& ee_hint = "",
+            const std::vector<std::string>& controlled_joints = {});
 
-  // Update internal kinematics with joint positions q (size must be >= dofs()).
+  // Update internal kinematics with controlled joint positions q.
   // Returns false if not initialized or size mismatch.
   bool update(const Eigen::Ref<const Eigen::VectorXd>& q);
 
@@ -32,6 +34,14 @@ public:
 
   // Get end-effector Jacobian.  Returns false if not initialized.
   bool getJacobian(Eigen::Ref<Eigen::Matrix<double,6,Eigen::Dynamic>> J_out);
+
+  // Get end-effector Jacobian and its Moore-Penrose pseudo-inverse J^+.
+  bool getJacobianAndPseudoInverse(Eigen::Ref<Eigen::Matrix<double,6,Eigen::Dynamic>> J_out,
+                                   Eigen::Ref<Eigen::Matrix<double,Eigen::Dynamic,6>> J_pinv_out,
+                                   double rcond = 1e-6);
+
+  // Get gravity torques. Returns false if not initialized.
+  bool getGravity(Eigen::Ref<Eigen::VectorXd> g_out);
 
   int nj;
 

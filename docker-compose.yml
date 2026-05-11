@@ -1,0 +1,30 @@
+services:
+  controllers:
+    #build:
+    #  context: .
+    #  dockerfile: Dockerfile
+    #  args:
+    #    - USER_UID=${USER_UID}
+    #    - USER_GID=${USER_GID}
+    image: smihael/compliant-controllers
+    user: "${USER_UID:-1000}:${USER_GID:-1000}"  
+    network_mode: host
+    privileged: true
+    command: /bin/bash
+    tty: true
+    stdin_open: true
+    volumes:
+      - ./:/home/user/controllers_ws/src/compliant_controllers
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - ./limits.conf/99-realtime.conf:/etc/security/limits.d/99-realtime.conf:ro
+      - /dev:/dev
+    environment:
+      QT_X11_NO_MITSHM: 1
+      DISPLAY: ${DISPLAY}
+      ROS_DISTRO: humble
+    cap_add:
+      - SYS_NICE
+    ulimits:
+      rtprio: 99
+      rttime: -1
+      memlock: 8428281856

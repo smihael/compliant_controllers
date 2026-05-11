@@ -1,0 +1,83 @@
+# Use of /** so that the configurations hold for controller
+# managers regardless of their namespace. Useful in multi-robot setups.
+# Extends lbr_description/ros2_control/lbr_controllers.yaml with compliant_controllers
+
+/**/controller_manager:
+  ros__parameters:
+    update_rate: 100
+
+    # ROS 2 control broadcasters
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    # Compliant controllers
+    cartesian_impedance_controller:
+      type: compliant_controllers/GenericCartesianControllerWrapper
+
+    iiwa14_arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    iiwa_arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
+# Joint state broadcaster (inherited from lbr_stack)
+/**/joint_state_broadcaster:
+  ros__parameters: {}
+
+# Joint trajectory controller with effort command interface
+/**/iiwa14_arm_controller:
+  ros__parameters:
+    joints:
+      - lbr_A1
+      - lbr_A2
+      - lbr_A3
+      - lbr_A4
+      - lbr_A5
+      - lbr_A6
+      - lbr_A7
+    command_interfaces:
+      - effort
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 50.0
+    action_monitor_rate: 20.0
+
+/**/iiwa_arm_controller:
+  ros__parameters:
+    joints:
+      - lbr_A1
+      - lbr_A2
+      - lbr_A3
+      - lbr_A4
+      - lbr_A5
+      - lbr_A6
+      - lbr_A7
+    command_interfaces:
+      - effort
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 50.0
+    action_monitor_rate: 20.0
+
+# Cartesian impedance controller
+/**/cartesian_impedance_controller:
+  ros__parameters:
+    arm_id: lbr
+    joints:
+      - lbr_A1
+      - lbr_A2
+      - lbr_A3
+      - lbr_A4
+      - lbr_A5
+      - lbr_A6
+      - lbr_A7
+    init_k_pos: 200.0
+    init_k_ori: 10.0
+    ee_frame: lbr_link_ee
+    robot_description_node: /lbr/robot_state_publisher
+    robot_description_param: robot_description
+    impl_library: libcartesian_impedance_impl.so
+    add_gravity_compensation: true  
