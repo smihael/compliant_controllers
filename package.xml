@@ -11,6 +11,8 @@
 
   <depend>controller_interface</depend>
   <depend>hardware_interface</depend>
+  <depend>controller_manager</depend>
+  <depend>joint_state_broadcaster</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
@@ -19,7 +21,6 @@
   <depend>compliant_controllers_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>eigen</depend>
-
   <depend>pinocchio</depend>
 
   <test_depend>ament_cmake_gmock</test_depend>

@@ -54,7 +54,7 @@ def _build_robot_description(context: LaunchContext, arm_id, load_gripper):
     try:
         custom_yaml = os.path.join(
             get_package_share_directory('compliant_controllers'),
-            'config', 'iiwa14_gazebo_controllers.yaml'
+            'config', 'lbr_gz_controllers.yaml'
         )
         if os.path.exists(custom_yaml):
             urdf_xml = xacro_doc.toxml().replace(default_yaml, custom_yaml)
@@ -100,9 +100,9 @@ def _gazebo_include(context: LaunchContext, world, show_gazebo_gui, controller_d
 def _build_runtime_nodes(context: LaunchContext, controller_name, publish_world_to_base, show_rviz, arm_id):
     """Build runtime nodes for spawning and controller management."""
     controller = context.perform_substitution(controller_name)
-    publish_tf = context.perform_substitution(publish_world_to_base).lower() in ('true', '1', 'yes')
     rviz_flag = context.perform_substitution(show_rviz).lower() in ('true', '1', 'yes')
     arm_id_str = context.perform_substitution(arm_id)
+    controller_manager = f'/{arm_id_str}/controller_manager'
 
     # Spawn robot in Gazebo
     spawn = Node(
@@ -117,12 +117,9 @@ def _build_runtime_nodes(context: LaunchContext, controller_name, publish_world_
     # Joint state broadcaster spawner args
     controller_config = os.path.join(
         get_package_share_directory('compliant_controllers'),
-        'config', 'iiwa14_gazebo_controllers.yaml'
+            'config', 'lbr_gz_controllers.yaml'
     )
     jsb_args = ['joint_state_broadcaster', '--controller-manager', 'controller_manager', '--params-file', controller_config]
-    
-    # Main controller spawner args
-    main_args = [controller, '--controller-manager', 'controller_manager', '--params-file', controller_config, '--ros-args', '--log-level', 'DEBUG']
 
     jsb_spawner = Node(
         package='controller_manager',
@@ -133,33 +130,47 @@ def _build_runtime_nodes(context: LaunchContext, controller_name, publish_world_
         arguments=jsb_args,
         namespace=arm_id_str
     )
-    
-    main_controller_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        name='spawner_primary_controller',
-        output='screen',
-        parameters=[{'use_sim_time': True}],
-        arguments=main_args,
-        namespace=arm_id_str
+
+    include_controller = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('compliant_controllers'),
+                'launch',
+                'generic_controller_wrapper.launch.py',
+            )
+        ),
+        launch_arguments={
+            'namespace': arm_id_str,
+            'arm_id': 'lbr',
+            'controller_name': controller,
+            'controller_manager': controller_manager,
+            'impl_library': LaunchConfiguration('impl_library'),
+            'init_k_pos': LaunchConfiguration('init_k_pos'),
+            'init_k_ori': LaunchConfiguration('init_k_ori'),
+            'joints': 'lbr_A1,lbr_A2,lbr_A3,lbr_A4,lbr_A5,lbr_A6,lbr_A7',
+            'ee_frame': 'lbr_link_ee',
+            'base_frame': 'lbr_link_0',
+            'robot_description_node': f'/{arm_id_str}/robot_state_publisher',
+            'robot_description_param': 'robot_description',
+            'load_end_effector_profile': 'false',
+            'add_gravity_compensation': LaunchConfiguration('add_gravity_compensation'),
+            'compensate_end_effector_load': LaunchConfiguration('compensate_end_effector_load'),
+            'add_friction_compensation': LaunchConfiguration('add_friction_compensation'),
+            'friction_model': LaunchConfiguration('friction_model'),
+            'friction_scale': LaunchConfiguration('friction_scale'),
+            'friction_use_gating': LaunchConfiguration('friction_use_gating'),
+            'diagnostic_log_file': LaunchConfiguration('diagnostic_log_file'),
+            'diagnostic_log_duration': LaunchConfiguration('diagnostic_log_duration'),
+            'diagnostic_mode': LaunchConfiguration('diagnostic_mode'),
+            'publish_world_to_base': LaunchConfiguration('publish_world_to_base'),
+        }.items(),
     )
 
-    # Chain events: spawn -> joint_state_broadcaster -> main_controller
+    # Chain events: spawn -> joint_state_broadcaster -> main controller wrapper.
     spawn_to_js = RegisterEventHandler(OnProcessExit(target_action=spawn, on_exit=[jsb_spawner]))
-    js_to_main = RegisterEventHandler(OnProcessExit(target_action=jsb_spawner, on_exit=[main_controller_spawner]))
+    js_to_main = RegisterEventHandler(OnProcessExit(target_action=jsb_spawner, on_exit=[include_controller]))
 
     nodes = [spawn, spawn_to_js, js_to_main]
-
-    # Static TF world -> iiwa14_link_0 (base frame)
-    if publish_tf:
-        base_frame = f"{arm_id_str}_link_0"
-        nodes.append(Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='static_tf_world_to_base',
-            arguments=['0', '0', '0', '0', '0', '0', 'world', base_frame],
-            output='screen'
-        ))
 
     # RViz visualization
     if rviz_flag:
@@ -211,6 +222,22 @@ def generate_launch_description():
             default_value='cartesian_impedance_controller',
             description='Primary controller to spawn (effort-based: cartesian_impedance_controller, lbr_joint_impedance_controller, etc.)'
         ),
+        DeclareLaunchArgument(
+            'impl_library',
+            default_value='libcartesian_impedance_impl.so',
+            description='Generic wrapper implementation library'
+        ),
+        DeclareLaunchArgument('init_k_pos', default_value='200.0'),
+        DeclareLaunchArgument('init_k_ori', default_value='10.0'),
+        DeclareLaunchArgument('add_gravity_compensation', default_value='true'),
+        DeclareLaunchArgument('compensate_end_effector_load', default_value='false'),
+        DeclareLaunchArgument('add_friction_compensation', default_value='false'),
+        DeclareLaunchArgument('friction_model', default_value='auto'),
+        DeclareLaunchArgument('friction_scale', default_value='1.0'),
+        DeclareLaunchArgument('friction_use_gating', default_value='true'),
+        DeclareLaunchArgument('diagnostic_log_file', default_value=''),
+        DeclareLaunchArgument('diagnostic_log_duration', default_value='0.0'),
+        DeclareLaunchArgument('diagnostic_mode', default_value='0'),
         DeclareLaunchArgument(
             'world',
             default_value='empty.sdf',

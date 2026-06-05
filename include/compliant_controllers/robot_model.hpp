@@ -43,6 +43,22 @@ public:
   // Get gravity torques. Returns false if not initialized.
   bool getGravity(Eigen::Ref<Eigen::VectorXd> g_out);
 
+  // Get Coriolis/centrifugal torques for the provided joint velocities.
+  // Returns false if not initialized or size mismatch.
+  bool getCoriolis(const Eigen::Ref<const Eigen::VectorXd>& dq,
+                   Eigen::Ref<Eigen::VectorXd> c_out);
+
+  // Get joint-space mass matrix in controlled-joint coordinates.
+  // Returns false if not initialized or matrix size mismatch.
+  bool getMassMatrix(Eigen::Ref<Eigen::MatrixXd> m_out);
+
+  // Get combined mass + coriolis torque term: M(q)*ddq + c(q,dq).
+  // Computed as rnea(q,dq,ddq) - g(q) in controlled-joint coordinates.
+  // Returns false if not initialized or size mismatch.
+  bool getMassCoriolisTorque(const Eigen::Ref<const Eigen::VectorXd>& dq,
+                             const Eigen::Ref<const Eigen::VectorXd>& ddq,
+                             Eigen::Ref<Eigen::VectorXd> mc_out);
+
   int nj;
 
   // Velocity DOF count (nv). Returns 0 if not initialized.

@@ -5,6 +5,7 @@
 #include <pinocchio/algorithm/jacobian.hpp>
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/rnea.hpp>
+#include <pinocchio/algorithm/crba.hpp>
 #include <pinocchio/spatial/se3.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -181,6 +182,101 @@ struct RobotModel::Impl {
     }
     return true;
   }
+
+  bool coriolis(const Eigen::Ref<const Eigen::VectorXd>& dq_in,
+                Eigen::Ref<Eigen::VectorXd> c_out) {
+    if(!(initialized && last_update_ok)) return false;
+    if (dq_in.size() != static_cast<long>(controlled_v_indices.size()) || c_out.size() <= 0) {
+      return false;
+    }
+
+    Eigen::VectorXd v_full = Eigen::VectorXd::Zero(model.nv);
+    for (Eigen::Index i = 0; i < dq_in.size(); ++i) {
+      v_full[static_cast<Eigen::Index>(controlled_v_indices[static_cast<size_t>(i)])] = dq_in[i];
+    }
+
+    Eigen::VectorXd a_zero = Eigen::VectorXd::Zero(model.nv);
+    const Eigen::VectorXd tau_non_linear = pinocchio::rnea(model, data, q_cache, v_full, a_zero);
+    const Eigen::VectorXd tau_gravity = pinocchio::rnea(model, data, q_cache,
+                                                        Eigen::VectorXd::Zero(model.nv), a_zero);
+    const Eigen::VectorXd tau_c = tau_non_linear - tau_gravity;
+
+    const int used = std::min<int>(static_cast<int>(c_out.size()),
+                                   static_cast<int>(controlled_v_indices.size()));
+    for (int i = 0; i < used; ++i) {
+      const int source_index = controlled_v_indices[static_cast<size_t>(i)];
+      if (source_index >= tau_c.size()) {
+        return false;
+      }
+      c_out[i] = tau_c[source_index];
+    }
+    return true;
+  }
+
+  bool massMatrix(Eigen::Ref<Eigen::MatrixXd> m_out) {
+    if (!(initialized && last_update_ok)) {
+      return false;
+    }
+    if (m_out.rows() != nj || m_out.cols() != nj) {
+      return false;
+    }
+
+    pinocchio::crba(model, data, q_cache);
+    data.M.triangularView<Eigen::StrictlyLower>() =
+        data.M.transpose().triangularView<Eigen::StrictlyLower>();
+
+    m_out.setZero();
+    for (int r = 0; r < nj; ++r) {
+      const int source_r = controlled_v_indices[static_cast<size_t>(r)];
+      if (source_r >= data.M.rows()) {
+        return false;
+      }
+      for (int c = 0; c < nj; ++c) {
+        const int source_c = controlled_v_indices[static_cast<size_t>(c)];
+        if (source_c >= data.M.cols()) {
+          return false;
+        }
+        m_out(r, c) = data.M(source_r, source_c);
+      }
+    }
+    return true;
+  }
+
+  bool massCoriolis(const Eigen::Ref<const Eigen::VectorXd>& dq_in,
+                    const Eigen::Ref<const Eigen::VectorXd>& ddq_in,
+                    Eigen::Ref<Eigen::VectorXd> mc_out) {
+    if (!(initialized && last_update_ok)) return false;
+    if (dq_in.size() != static_cast<long>(controlled_v_indices.size()) ||
+        ddq_in.size() != static_cast<long>(controlled_v_indices.size()) ||
+        mc_out.size() <= 0) {
+      return false;
+    }
+
+    Eigen::VectorXd v_full = Eigen::VectorXd::Zero(model.nv);
+    Eigen::VectorXd a_full = Eigen::VectorXd::Zero(model.nv);
+    for (Eigen::Index i = 0; i < dq_in.size(); ++i) {
+      const auto source = static_cast<Eigen::Index>(controlled_v_indices[static_cast<size_t>(i)]);
+      v_full[source] = dq_in[i];
+      a_full[source] = ddq_in[i];
+    }
+
+    const Eigen::VectorXd tau_full = pinocchio::rnea(model, data, q_cache, v_full, a_full);
+    const Eigen::VectorXd tau_g = pinocchio::rnea(model, data, q_cache,
+                                                  Eigen::VectorXd::Zero(model.nv),
+                                                  Eigen::VectorXd::Zero(model.nv));
+    const Eigen::VectorXd tau_mc = tau_full - tau_g;
+
+    const int used = std::min<int>(static_cast<int>(mc_out.size()),
+                                   static_cast<int>(controlled_v_indices.size()));
+    for (int i = 0; i < used; ++i) {
+      const int source_index = controlled_v_indices[static_cast<size_t>(i)];
+      if (source_index >= tau_mc.size()) {
+        return false;
+      }
+      mc_out[i] = tau_mc[source_index];
+    }
+    return true;
+  }
 };
 
 RobotModel::RobotModel() : impl_(std::make_unique<Impl>()) {}
@@ -221,6 +317,24 @@ bool RobotModel::getJacobianAndPseudoInverse(Eigen::Ref<Eigen::Matrix<double,6,E
 bool RobotModel::getGravity(Eigen::Ref<Eigen::VectorXd> g_out) {
   if(!impl_) return false;
   return impl_->gravity(g_out);
+}
+
+bool RobotModel::getCoriolis(const Eigen::Ref<const Eigen::VectorXd>& dq,
+                             Eigen::Ref<Eigen::VectorXd> c_out) {
+  if(!impl_) return false;
+  return impl_->coriolis(dq, c_out);
+}
+
+bool RobotModel::getMassMatrix(Eigen::Ref<Eigen::MatrixXd> m_out) {
+  if (!impl_) return false;
+  return impl_->massMatrix(m_out);
+}
+
+bool RobotModel::getMassCoriolisTorque(const Eigen::Ref<const Eigen::VectorXd>& dq,
+                                       const Eigen::Ref<const Eigen::VectorXd>& ddq,
+                                       Eigen::Ref<Eigen::VectorXd> mc_out) {
+  if (!impl_) return false;
+  return impl_->massCoriolis(dq, ddq, mc_out);
 }
 
 bool RobotModel::valid() const {

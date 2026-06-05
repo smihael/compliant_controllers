@@ -19,7 +19,8 @@ Usage:
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 from lbr_bringup.description import LBRDescriptionMixin  
@@ -191,10 +192,23 @@ def generate_launch_description() -> LaunchDescription:
     ld.add_action(
         DeclareLaunchArgument(
             "ctrl",
-            default_value="iiwa14_arm_controller",
-            description="Controller to spawn (from compliant_controllers config)"
+            default_value="cartesian_impedance_controller",
+            description="Generic Cartesian controller wrapper to spawn"
         )
     )
+    ld.add_action(DeclareLaunchArgument("impl_library", default_value="libcartesian_impedance_impl.so"))
+    ld.add_action(DeclareLaunchArgument("init_k_pos", default_value="200.0"))
+    ld.add_action(DeclareLaunchArgument("init_k_ori", default_value="10.0"))
+    ld.add_action(DeclareLaunchArgument("add_gravity_compensation", default_value="true"))
+    ld.add_action(DeclareLaunchArgument("compensate_end_effector_load", default_value="false"))
+    ld.add_action(DeclareLaunchArgument("add_friction_compensation", default_value="false"))
+    ld.add_action(DeclareLaunchArgument("friction_model", default_value="auto"))
+    ld.add_action(DeclareLaunchArgument("friction_scale", default_value="1.0"))
+    ld.add_action(DeclareLaunchArgument("friction_use_gating", default_value="true"))
+    ld.add_action(DeclareLaunchArgument("diagnostic_log_file", default_value=""))
+    ld.add_action(DeclareLaunchArgument("diagnostic_log_duration", default_value="0.0"))
+    ld.add_action(DeclareLaunchArgument("diagnostic_mode", default_value="0"))
+    ld.add_action(DeclareLaunchArgument("publish_world_to_base", default_value="true"))
     # Optional: Launch log level control
     ld.add_action(
         DeclareLaunchArgument(
@@ -253,16 +267,39 @@ def generate_launch_description() -> LaunchDescription:
     )
     ld.add_action(joint_state_broadcaster)
     
-    controller = Node(
-        package="controller_manager",
-        executable="spawner",
-        output="screen",
-        arguments=[
-            LaunchConfiguration("ctrl"),
-            "--controller-manager", "controller_manager",
-            "--ros-args", "--log-level", log_level
-        ],
-        namespace=robot_name,
+    controller = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([
+                FindPackageShare("compliant_controllers"),
+                "launch",
+                "generic_controller_wrapper.launch.py",
+            ])
+        ),
+        launch_arguments={
+            "namespace": robot_name,
+            "arm_id": "lbr",
+            "controller_name": LaunchConfiguration("ctrl"),
+            "controller_manager": ["/", robot_name, "/controller_manager"],
+            "impl_library": LaunchConfiguration("impl_library"),
+            "init_k_pos": LaunchConfiguration("init_k_pos"),
+            "init_k_ori": LaunchConfiguration("init_k_ori"),
+            "joints": "lbr_A1,lbr_A2,lbr_A3,lbr_A4,lbr_A5,lbr_A6,lbr_A7",
+            "ee_frame": "lbr_link_ee",
+            "base_frame": "lbr_link_0",
+            "robot_description_node": ["/", robot_name, "/robot_state_publisher"],
+            "robot_description_param": "robot_description",
+            "load_end_effector_profile": "false",
+            "add_gravity_compensation": LaunchConfiguration("add_gravity_compensation"),
+            "compensate_end_effector_load": LaunchConfiguration("compensate_end_effector_load"),
+            "add_friction_compensation": LaunchConfiguration("add_friction_compensation"),
+            "friction_model": LaunchConfiguration("friction_model"),
+            "friction_scale": LaunchConfiguration("friction_scale"),
+            "friction_use_gating": LaunchConfiguration("friction_use_gating"),
+            "diagnostic_log_file": LaunchConfiguration("diagnostic_log_file"),
+            "diagnostic_log_duration": LaunchConfiguration("diagnostic_log_duration"),
+            "diagnostic_mode": LaunchConfiguration("diagnostic_mode"),
+            "publish_world_to_base": LaunchConfiguration("publish_world_to_base"),
+        }.items(),
     )
     ld.add_action(controller)
     

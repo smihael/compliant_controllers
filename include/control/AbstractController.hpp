@@ -3,11 +3,22 @@
 #include "ControlStates.hpp"
 #include <string>
 #include <type_traits>
+#include <variant>
+#include <vector>
 
 namespace control {
 
 class AbstractController {
 public:
+    using ParameterValue = std::variant<
+        bool,
+        int64_t,
+        double,
+        std::string,
+        std::vector<int64_t>,
+        std::vector<double>,
+        std::vector<std::string>>;
+
     virtual ~AbstractController() = default;
 
     /**
@@ -24,6 +35,12 @@ public:
 
     // Optional injection of robot model owned externally
     virtual void setRobotModel(void* /*model_ptr*/) {}
+
+    // Optional typed parameter forwarding from wrapper to implementation.
+    virtual void setParameter(const std::string& /*name*/, const ParameterValue& /*value*/) {}
+
+    // Legacy compatibility stub; concrete controllers can implement their own parsers.
+    bool loadParametersFromFile(const std::string& /*path*/) { return false; }
 
 };
 

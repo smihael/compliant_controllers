@@ -15,7 +15,7 @@ if [ -f /controllers_ws/install/setup.bash ]; then
 	source /controllers_ws/install/setup.bash
 fi
 
-rosdep update
+rosdep update --rosdistro ${ROS_DISTRO}
 
 mkdir -p src
 

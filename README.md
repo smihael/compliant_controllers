@@ -10,6 +10,7 @@ Robot-agnostic compliant controllers for ROS 2 using ros2_control.
 - Sample robot model implementation based on the Pinocchio library that reads the URDF from ROS parameters
 - Sample controller implementation: `CartesianImpedanceController : AbstractController` builds as a plain shared library (.so) without ROS deps
 - ROS 2 wrapper: `GenericCartesianControllerWrapper` is a ros2_control plugin that instantiates the chosen `AbstractController`, streams states in real time, calls a `RobotModel` implementation and the controller’s `step(...)`, and writes torques.
+- Friction estimation implementation: `FrictionEstimationImpl` (loaded via `impl_library`) performs per-joint sinusoidal excitation and logs measurement data to CSV.
 
 Thus, the controller logic is fully separated from ROS and the robot. This keeps controller code simple and readable (no ROS 2 boilerplate). Controller implementations can be written in C++ or e.g., Simulink. See https://github.com/smihael/compliant_controllers_simulink_pipeline
 
@@ -148,5 +149,102 @@ ros2 run compliant_controllers test_cartesian_command.py \
 - `tf_prefix_delim` (string): Delimiter between prefix and frame name (`/` or `_`). Default: `/`
 - `dx`, `dy`, `dz` (double): Cartesian position offsets [m]. Default: `0.0, 0.0, 0.05`
 - `k_lin`, `k_rot` (double): Linear and rotational stiffness. Default: `300.0, 20.0`
+
+## Friction Estimation Measurement Plugin
+
+Use the same wrapper plugin, but set:
+
+```yaml
+impl_library: libfriction_estimation_impl.so
+```
+
+An example controller entry is included in `config/fr3_controllers.yaml` as `friction_estimation_controller`.
+
+At runtime, the plugin now runs the complete friction pipeline internally (no external orchestration script required):
+
+1. Move robot to `q_init`.
+2. Settle at `q_init`.
+3. Excite one joint while holding all others at `q_init`.
+4. Return to `q_init` and settle.
+5. Repeat for each selected joint.
+6. Export raw samples and estimated friction parameter matrices.
+
+The excitation follows the `friction_estimation.mdl` Motion Gen structure:
+
+1. Four sine components with amplitudes `pi/16`, `pi/8`, `pi/4`, `pi/2` at base frequency 1 Hz (`2*pi`).
+2. Each component is gated by a saturating ramp with starts `[1, 2.5, 5, 10]` and slopes `[1, 0.5, 0.25, 0.1]`.
+3. Joint-specific scaling from the MATLAB function block is applied (`joint 2: x0.5`, `joint 4/6: x2/3`, others unchanged).
+4. The scalar profile is composed into a 7D vector by writing only the selected joint entry.
+
+CSV columns:
+
+```text
+t,active_joint,excitation,q,dq,tau_measured,tau_commanded,q_des,dq_des,sine_tau_ff
+```
+
+At the end of the run, the plugin also writes:
+
+- `model1_estimated_friction.csv`: columns `joint,fv,fc,fo`
+- `model2_estimated_friction.csv`: columns `joint,hysteresis,fv_p,fc_p,fv_n,fc_n`
+- `friction_estimated_friction.m`: MATLAB-ready variables `q_init`, `model1_estimated_friction`, `model2_estimated_friction`
+
+Configure via environment variables before launch:
+
+```bash
+export TEST_JOINT_INDEX=7
+# Optional alias: FRICTION_ESTIMATION_TEST_JOINT_INDEX
+export FRICTION_ESTIMATION_OUTPUT_DIR=/tmp
+# Optional explicit file path override:
+# export FRICTION_ESTIMATION_OUTPUT=/tmp/friction_results_joint7_custom.csv
+export FRICTION_ESTIMATION_Q_INIT="0,-0.785398,0,-2.356194,0,1.570796,0.785398"
+export FRICTION_ESTIMATION_START_JOINT=1
+export FRICTION_ESTIMATION_END_JOINT=7
+export FRICTION_ESTIMATION_SETTLE_SEC=1.0
+export FRICTION_ESTIMATION_RETURN_SETTLE_SEC=1.0
+export FRICTION_ESTIMATION_MEASURE_SEC=20.0
+export FRICTION_ESTIMATION_AMPLITUDE_RAD=0.25
+# Optional per-joint overrides (7 values):
+# export FRICTION_ESTIMATION_AMPLITUDES_RAD="0.25,0.2,0.25,0.2,0.2,0.2,0.2"
+# export FRICTION_ESTIMATION_DURATIONS_SEC="20,20,20,20,20,20,20"
+export FRICTION_ESTIMATION_FREQ_HZ=0.25
+export FRICTION_ESTIMATION_TAU_FF_NM=0.0
+export FRICTION_ESTIMATION_HOLD_KP=50.0
+export FRICTION_ESTIMATION_HOLD_KD=5.0
+export FRICTION_ESTIMATION_TAU_LIMIT_NM=20.0
+# Optional explicit outputs:
+# export FRICTION_ESTIMATION_MODEL1_OUTPUT=/tmp/model1_estimated_friction.csv
+# export FRICTION_ESTIMATION_MODEL2_OUTPUT=/tmp/model2_estimated_friction.csv
+# export FRICTION_ESTIMATION_MATLAB_OUTPUT=/tmp/friction_estimated_friction.m
+```
+
+Launch with:
+
+```bash
+ros2 launch compliant_controllers fr3.launch.py controller_name:=friction_estimation_controller
+```
+
+or use the dedicated launch file with direct friction arguments:
+
+```bash
+ros2 launch compliant_controllers fr3_friction_estimation.launch.py \
+  robot_ip:=192.168.1.1 \
+  start_joint:=1 end_joint:=7 \
+  q_init:="0,-0.785398,0,-2.356194,0,1.570796,0.785398" \
+  settle_sec:=1.0 return_settle_sec:=1.0 measure_sec:=20.0 \
+  move_max_vel_rad_s:=0.08 move_tau_limit_nm:=4.0 \
+  move_kp_scale:=0.15 move_kd_scale:=0.30 \
+  amplitude_rad:=0.25 freq_hz:=0.25 \
+  output_dir:=/tmp/friction_run
+```
+
+Per-joint timing/amplitude overrides via launch:
+
+```bash
+ros2 launch compliant_controllers fr3_friction_estimation.launch.py \
+  durations_sec:="20,20,20,20,20,20,20" \
+  amplitudes_rad:="0.25,0.2,0.25,0.2,0.2,0.2,0.2"
+```
+
+`plot_friction_results.m` can still be used for per-joint inspection from the generated sample CSV.
 
 

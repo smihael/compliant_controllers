@@ -139,6 +139,19 @@ def launch_setup(context, *args, **kwargs):
     launch_rviz = LaunchConfiguration("launch_rviz")
     gazebo_gui = LaunchConfiguration("gazebo_gui")
     world_file = LaunchConfiguration("world_file")
+    impl_library = LaunchConfiguration("impl_library")
+    init_k_pos = LaunchConfiguration("init_k_pos")
+    init_k_ori = LaunchConfiguration("init_k_ori")
+    add_gravity_compensation = LaunchConfiguration("add_gravity_compensation")
+    compensate_end_effector_load = LaunchConfiguration("compensate_end_effector_load")
+    add_friction_compensation = LaunchConfiguration("add_friction_compensation")
+    friction_model = LaunchConfiguration("friction_model")
+    friction_scale = LaunchConfiguration("friction_scale")
+    friction_use_gating = LaunchConfiguration("friction_use_gating")
+    diagnostic_log_file = LaunchConfiguration("diagnostic_log_file")
+    diagnostic_log_duration = LaunchConfiguration("diagnostic_log_duration")
+    diagnostic_mode = LaunchConfiguration("diagnostic_mode")
+    publish_world_to_base = LaunchConfiguration("publish_world_to_base")
     
     # Get controllers config from compliant_controllers
     initial_joint_controllers = PathJoinSubstitution(
@@ -230,17 +243,46 @@ def launch_setup(context, *args, **kwargs):
         condition=IfCondition(launch_rviz),
     )
     
-    initial_joint_controller_spawner_started = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=[initial_joint_controller, "-c", "/controller_manager"],
-        condition=IfCondition(start_joint_controller),
-    )
-    initial_joint_controller_spawner_stopped = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=[initial_joint_controller, "-c", "/controller_manager", "--stopped"],
-        condition=UnlessCondition(start_joint_controller),
+    prefix_str = prefix.perform(context).strip('"')
+    ur_joints = ','.join([
+        f"{prefix_str}shoulder_pan_joint",
+        f"{prefix_str}shoulder_lift_joint",
+        f"{prefix_str}elbow_joint",
+        f"{prefix_str}wrist_1_joint",
+        f"{prefix_str}wrist_2_joint",
+        f"{prefix_str}wrist_3_joint",
+    ])
+
+    include_controller = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            [FindPackageShare("compliant_controllers"), "/launch/generic_controller_wrapper.launch.py"]
+        ),
+        launch_arguments={
+            "namespace": "",
+            "arm_id": ur_type,
+            "controller_name": initial_joint_controller,
+            "start_controller": start_joint_controller,
+            "controller_manager": "/controller_manager",
+            "impl_library": impl_library,
+            "init_k_pos": init_k_pos,
+            "init_k_ori": init_k_ori,
+            "joints": ur_joints,
+            "ee_frame": f"{prefix_str}tool0",
+            "base_frame": f"{prefix_str}base_link",
+            "robot_description_node": "/robot_state_publisher",
+            "robot_description_param": "robot_description",
+            "load_end_effector_profile": "false",
+            "add_gravity_compensation": add_gravity_compensation,
+            "compensate_end_effector_load": compensate_end_effector_load,
+            "add_friction_compensation": add_friction_compensation,
+            "friction_model": friction_model,
+            "friction_scale": friction_scale,
+            "friction_use_gating": friction_use_gating,
+            "diagnostic_log_file": diagnostic_log_file,
+            "diagnostic_log_duration": diagnostic_log_duration,
+            "diagnostic_mode": diagnostic_mode,
+            "publish_world_to_base": publish_world_to_base,
+        }.items(),
     )
     
     # GZ nodes
@@ -287,8 +329,7 @@ def launch_setup(context, *args, **kwargs):
         robot_state_publisher_node,
         joint_state_broadcaster_spawner,
         delay_rviz_after_joint_state_broadcaster_spawner,
-        initial_joint_controller_spawner_stopped,
-        initial_joint_controller_spawner_started,
+        include_controller,
         gz_spawn_entity,
         gz_launch_description_with_gui,
         gz_launch_description_without_gui,
@@ -369,6 +410,19 @@ def generate_launch_description():
             description="Robot controller to start.",
         )
     )
+    declared_arguments.append(DeclareLaunchArgument("impl_library", default_value="libcartesian_impedance_impl.so"))
+    declared_arguments.append(DeclareLaunchArgument("init_k_pos", default_value="150.0"))
+    declared_arguments.append(DeclareLaunchArgument("init_k_ori", default_value="10.0"))
+    declared_arguments.append(DeclareLaunchArgument("add_gravity_compensation", default_value="true"))
+    declared_arguments.append(DeclareLaunchArgument("compensate_end_effector_load", default_value="false"))
+    declared_arguments.append(DeclareLaunchArgument("add_friction_compensation", default_value="false"))
+    declared_arguments.append(DeclareLaunchArgument("friction_model", default_value="auto"))
+    declared_arguments.append(DeclareLaunchArgument("friction_scale", default_value="1.0"))
+    declared_arguments.append(DeclareLaunchArgument("friction_use_gating", default_value="true"))
+    declared_arguments.append(DeclareLaunchArgument("diagnostic_log_file", default_value=""))
+    declared_arguments.append(DeclareLaunchArgument("diagnostic_log_duration", default_value="0.0"))
+    declared_arguments.append(DeclareLaunchArgument("diagnostic_mode", default_value="0"))
+    declared_arguments.append(DeclareLaunchArgument("publish_world_to_base", default_value="true"))
     declared_arguments.append(
         DeclareLaunchArgument("launch_rviz", default_value="true", description="Launch RViz?")
     )
@@ -386,4 +440,3 @@ def generate_launch_description():
     )
     
     return LaunchDescription(declared_arguments + [OpaqueFunction(function=launch_setup)])
-

@@ -1,9 +1,13 @@
 #include <compliant_controllers/generic_cartesian_controller_wrapper.hpp>
+#include <compliant_controllers/parameter_utils.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <vector>
 
@@ -20,32 +24,57 @@
 namespace compliant_controllers {
 
 namespace {
-bool get_optional_bool(const rclcpp_lifecycle::LifecycleNode::SharedPtr& node,
-                       const std::string& name,
-                       bool fallback) {
-  try {
-    return node->get_parameter(name).as_bool();
-  } catch (const std::exception&) {
-    return fallback;
+std::optional<control::AbstractController::ParameterValue> parameter_to_value(const rclcpp::Parameter& parameter) {
+  switch (parameter.get_type()) {
+    case rclcpp::ParameterType::PARAMETER_BOOL:
+      return parameter.as_bool();
+    case rclcpp::ParameterType::PARAMETER_INTEGER:
+      return parameter.as_int();
+    case rclcpp::ParameterType::PARAMETER_DOUBLE:
+      return parameter.as_double();
+    case rclcpp::ParameterType::PARAMETER_STRING:
+      return parameter.as_string();
+    case rclcpp::ParameterType::PARAMETER_INTEGER_ARRAY:
+      return parameter.as_integer_array();
+    case rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY:
+      return parameter.as_double_array();
+    case rclcpp::ParameterType::PARAMETER_STRING_ARRAY:
+      return parameter.as_string_array();
+    default:
+      return std::nullopt;
   }
 }
 
-double get_optional_double(const rclcpp_lifecycle::LifecycleNode::SharedPtr& node,
-                           const std::string& name,
-                           double fallback) {
-  try {
-    return node->get_parameter(name).as_double();
-  } catch (const std::exception&) {
-    return fallback;
+void forward_all_parameters_to_impl(const rclcpp_lifecycle::LifecycleNode::SharedPtr& node,
+                                    control::AbstractController* impl) {
+  if (impl == nullptr || node == nullptr) {
+    return;
   }
-}
 
-std::vector<double> get_optional_double_array(const rclcpp_lifecycle::LifecycleNode::SharedPtr& node,
-                                              const std::string& name) {
-  try {
-    return node->get_parameter(name).as_double_array();
-  } catch (const std::exception&) {
-    return {};
+  const auto listed = node->list_parameters({}, 10);
+  std::string plugin_params_file;
+  for (const auto& param_name : listed.names) {
+    if (!node->has_parameter(param_name)) {
+      continue;
+    }
+    const auto parameter = node->get_parameter(param_name);
+
+    if (param_name == "plugin_params_file" &&
+        parameter.get_type() == rclcpp::ParameterType::PARAMETER_STRING) {
+      plugin_params_file = parameter.as_string();
+      continue;
+    }
+
+    const auto value = parameter_to_value(parameter);
+    if (!value.has_value()) {
+      continue;
+    }
+    impl->setParameter(param_name, *value);
+  }
+
+  // Apply file-based parameters last so they can override values from regular ROS parameters.
+  if (!plugin_params_file.empty()) {
+    impl->setParameter("plugin_params_file", plugin_params_file);
   }
 }
 }  // namespace
@@ -105,12 +134,18 @@ CallbackReturn GenericCartesianControllerWrapper::on_init() {
   cartesian_command_sub_ = get_node()->create_subscription<compliant_controllers_msgs::msg::CartesianCommand>(
     "cartesian_command", command_qos,
     std::bind(&GenericCartesianControllerWrapper::cartesian_command_callback, this, std::placeholders::_1));
+  diagnostic_mode_sub_ = get_node()->create_subscription<std_msgs::msg::Int32>(
+    "diagnostic_mode", rclcpp::QoS(rclcpp::KeepLast(1)),
+    std::bind(&GenericCartesianControllerWrapper::diagnostic_mode_callback, this, std::placeholders::_1));
 
     // if CONTROLLER_DEBUG env is set, then set logger to DEBUG level
     if (std::getenv("CONTROLLER_DEBUG") != nullptr) {
       get_node()->get_logger().set_level(rclcpp::Logger::Level::Debug);
+      RCLCPP_INFO(get_node()->get_logger(), "CONTROLLER_DEBUG is set; wrapper logger level set to DEBUG.");
     }
-    RCLCPP_INFO_STREAM(get_node()->get_logger(), "\033[32mUsing GenericCartesianControllerWrapper compiled at " << __DATE__ << ", " << __TIME__ << "\033[0m");
+    RCLCPP_INFO_STREAM(get_node()->get_logger(),
+                       "\033[32mGenericCartesianControllerWrapper initialized; compiled at "
+                       << __DATE__ << ", " << __TIME__ << "\033[0m");
 
   return CallbackReturn::SUCCESS;
 }
@@ -119,15 +154,15 @@ CallbackReturn GenericCartesianControllerWrapper::on_configure(const rclcpp_life
   // The following parameters are expected to be declared externally (e.g., via launch or YAML):
 
   arm_id_ = get_node()->get_parameter("arm_id").as_string();
-  init_k_pos_ = get_node()->get_parameter("init_k_pos").as_double();
-  init_k_ori_ = get_node()->get_parameter("init_k_ori").as_double();
+  init_k_pos_ = parameter_utils::get_optional_double(get_node(), "init_k_pos", 0.0);
+  init_k_ori_ = parameter_utils::get_optional_double(get_node(), "init_k_ori", 0.0);
 
   // Optional gravity compensation parameter
   try {
-    add_gravity_compensation_ = get_node()->get_parameter("add_gravity_compensation").as_bool();
-    RCLCPP_INFO(get_node()->get_logger(), "Gravity compensation: %s", add_gravity_compensation_ ? "enabled" : "disabled");
+    gravity_compensation_.enabled = get_node()->get_parameter("add_gravity_compensation").as_bool();
+    RCLCPP_INFO(get_node()->get_logger(), "Gravity compensation: %s", gravity_compensation_.enabled ? "enabled" : "disabled");
   } catch (const std::exception& e) {
-    add_gravity_compensation_ = false;
+    gravity_compensation_.enabled = false;
     RCLCPP_DEBUG(get_node()->get_logger(), "No 'add_gravity_compensation' parameter provided, defaulting to disabled");
   }
 
@@ -152,15 +187,16 @@ CallbackReturn GenericCartesianControllerWrapper::on_configure(const rclcpp_life
     RCLCPP_DEBUG(get_node()->get_logger(), "No explicit 'joints' parameter provided, using default arm_id_joint{i} naming");
   }
 
-  // Update configured remote parameter identifiers
-  robot_description_node_ = get_node()->get_parameter("robot_description_node").as_string();
-  robot_description_param_ = get_node()->get_parameter("robot_description_param").as_string();
+  friction_compensation_.configure(get_node(), num_joints_, true);
+
   try {
     end_effector_profile_node_ = get_node()->get_parameter("end_effector_profile_node").as_string();
   } catch (const std::exception&) {
     end_effector_profile_node_.clear();
   }
   readEndEffectorLoadParameters();
+  configureCompensationBuffers();
+  diagnostic_logger_.configure(get_node(), num_joints_);
 
   impl_library_ = get_node()->get_parameter("impl_library").as_string();
   if (!impl_library_.empty()) {
@@ -183,59 +219,13 @@ CallbackReturn GenericCartesianControllerWrapper::on_configure(const rclcpp_life
     }
   }
 
-  // Attempt to get robot_description - try local parameter first, then remote node
   std::string ee_frame_hint = get_node()->get_parameter("ee_frame").as_string();
-  
-  // Try to get robot_description from local parameters first (Gazebo sets this)
-  bool got_urdf = false;
-  try {
-    urdf_xml_ = get_node()->get_parameter("robot_description").as_string();
-    if (!urdf_xml_.empty()) {
-      got_urdf = true;
-      urdf_received_.store(true);
-      RCLCPP_INFO(get_node()->get_logger(), "Got robot_description from local parameters");
-    }
-  } catch (const std::exception& e) {
-    RCLCPP_DEBUG(get_node()->get_logger(), "robot_description not available locally: %s", e.what());
-  }
-
-  // If not available locally, try to fetch from remote node
-  if (!got_urdf) {
-    auto parameters_client = std::make_shared<rclcpp::AsyncParametersClient>(get_node(), robot_description_node_);
-    if (!parameters_client->wait_for_service(std::chrono::seconds(2))) {
-      RCLCPP_ERROR(get_node()->get_logger(), "Parameters service for node '%s' not available within timeout.", robot_description_node_.c_str());
-      return CallbackReturn::ERROR;
-    }
-    try {
-      auto future = parameters_client->get_parameters({robot_description_param_});
-      if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
-        RCLCPP_ERROR(get_node()->get_logger(), "Timed out waiting for parameter '%s/%s'.", robot_description_node_.c_str(), robot_description_param_.c_str());
-        return CallbackReturn::ERROR;
-      }
-      auto results = future.get();
-      if (results.empty()) {
-        RCLCPP_ERROR(get_node()->get_logger(), "Parameter '%s' not returned.", robot_description_param_.c_str());
-        return CallbackReturn::ERROR;
-      }
-      if (results.front().get_type() != rclcpp::ParameterType::PARAMETER_STRING) {
-        RCLCPP_ERROR(get_node()->get_logger(), "Parameter '%s' has wrong type.", robot_description_param_.c_str());
-        return CallbackReturn::ERROR;
-      }
-      urdf_xml_ = results.front().as_string();
-      if (urdf_xml_.empty()) {
-        RCLCPP_ERROR(get_node()->get_logger(), "Received empty URDF string from '%s/%s'.", robot_description_node_.c_str(), robot_description_param_.c_str());
-        return CallbackReturn::ERROR;
-      }
-      urdf_received_.store(true);
-      RCLCPP_INFO(get_node()->get_logger(), "Got robot_description from remote node '%s'", robot_description_node_.c_str());
-    } catch (const std::exception & e) {
-      RCLCPP_ERROR(get_node()->get_logger(), "Exception fetching robot description: %s", e.what());
-      return CallbackReturn::ERROR;
-    }
+  if (!robot_description_loader_.load(get_node())) {
+    return CallbackReturn::ERROR;
   }
 
   // Initialize robot model owned by wrapper
-  if(!robot_model_.init(urdf_xml_, ee_frame_hint, joint_names_)) {
+  if(!robot_model_.init(robot_description_loader_.urdfXml(), ee_frame_hint, joint_names_)) {
     RCLCPP_ERROR(get_node()->get_logger(), "Failed to initialize RobotModel with provided URDF");
     return CallbackReturn::ERROR;
   }
@@ -249,52 +239,128 @@ CallbackReturn GenericCartesianControllerWrapper::on_configure(const rclcpp_life
   }
   if (impl_) { impl_->setRobotModel(static_cast<void*>(&robot_model_)); }
   RCLCPP_INFO(get_node()->get_logger(), "Instantiated control implementation library (initialization deferred): %s", impl_library_.c_str());
+  logConfigurationSummary();
 
   return CallbackReturn::SUCCESS;
 }
 
+void GenericCartesianControllerWrapper::configureCompensationBuffers() {
+  gravity_compensation_.tau.setZero(num_joints_);
+  end_effector_load_compensation_.jacobian.resize(6, num_joints_);
+  end_effector_load_compensation_.tau.setZero(num_joints_);
+  diagnostic_gravity_.setZero(num_joints_);
+  diagnostic_coriolis_.setZero(num_joints_);
+  diagnostic_inertia_.setZero(num_joints_, num_joints_);
+}
+
+void GenericCartesianControllerWrapper::logConfigurationSummary() {
+  RCLCPP_INFO(get_node()->get_logger(),
+              "Wrapper configured: arm_id='%s', joints=%d (%s), ee_frame='%s', urdf='%s', impl='%s'",
+              arm_id_.c_str(), num_joints_,
+              use_named_joints_ ? "explicit names" : "arm_id_jointN names",
+              robot_model_.endEffectorFrame().c_str(),
+              robot_description_loader_.sourceDescription().c_str(),
+              name_fn_ ? name_fn_() : "<unknown>");
+  RCLCPP_INFO(get_node()->get_logger(),
+              "Compensation configured: gravity=%s, friction=%s (scale=%.3f), end_effector_load=%s",
+              gravity_compensation_.enabled ? "enabled" : "disabled",
+              friction_compensation_.enabled() ? friction_compensation_.modelName().c_str() : "disabled",
+              friction_compensation_.scale(),
+              end_effector_load_compensation_.enabled ? "enabled" : "disabled");
+  if (diagnostic_logger_.enabled()) {
+    RCLCPP_INFO(get_node()->get_logger(),
+                "Diagnostic logging: enabled file='%s', duration=%.3fs, mode=%d",
+                diagnostic_logger_.outputPath().c_str(),
+                diagnostic_logger_.duration(),
+                diagnostic_logger_.mode());
+  }
+  if (end_effector_load_compensation_.enabled) {
+    RCLCPP_INFO_STREAM(get_node()->get_logger(),
+                       "End-effector load: mass=" << end_effector_load_compensation_.mass
+                       << " kg, COM=[" << end_effector_load_compensation_.center_of_mass.transpose()
+                       << "], gravity=" << end_effector_load_compensation_.gravity_acceleration);
+  }
+}
+
+void GenericCartesianControllerWrapper::logActivationSummary() {
+  RCLCPP_INFO(get_node()->get_logger(),
+              "Wrapper activated: impl='%s', command_interfaces=%zu, state_interfaces=%zu, initial_step=ok",
+              name_fn_ ? name_fn_() : "<unknown>",
+              command_interfaces_.size(),
+              state_interfaces_.size());
+  RCLCPP_INFO_STREAM(get_node()->get_logger(),
+                     "Initial state: q=[" << state_buffer_.q.transpose()
+                     << "], tau_measured=[" << state_buffer_.tau.transpose()
+                     << "], ee_position=[" << state_buffer_.position.transpose()
+                     << "]");
+  RCLCPP_DEBUG_STREAM(get_node()->get_logger(),
+                      "Initial command: stiffness_diag=["
+                      << init_k_pos_ << ", " << init_k_pos_ << ", " << init_k_pos_
+                      << ", " << init_k_ori_ << ", " << init_k_ori_ << ", " << init_k_ori_
+                      << "], q_ns_des=[" << state_buffer_.q.transpose() << "]");
+}
+
+void GenericCartesianControllerWrapper::logFirstUpdateSummary() {
+  if (first_update_logged_) {
+    return;
+  }
+  first_update_logged_ = true;
+  RCLCPP_INFO_STREAM(get_node()->get_logger(),
+                     "First update completed: impl='" << (name_fn_ ? name_fn_() : "<unknown>")
+                     << "', tau_out=[" << tau_out_.transpose()
+                     << "], q=[" << state_buffer_.q.transpose()
+                     << "], dq=[" << state_buffer_.dq.transpose() << "]");
+}
+
 void GenericCartesianControllerWrapper::readEndEffectorLoadParameters() {
-  compensate_end_effector_load_ =
-    get_optional_bool(get_node(), "compensate_end_effector_load", false);
-  load_gravity_acceleration_ =
-    get_optional_double(get_node(), "end_effector_profile.load.gravity_acceleration", 9.80665);
+  end_effector_load_compensation_.enabled =
+    parameter_utils::get_optional_bool(get_node(), "compensate_end_effector_load", false);
+  const bool compensation_requested = end_effector_load_compensation_.enabled;
+  end_effector_load_compensation_.gravity_acceleration =
+    parameter_utils::get_optional_double(get_node(), "end_effector_profile.load.gravity_acceleration", 9.80665);
   bool loaded_from_local_params = false;
   try {
-    load_mass_ = get_node()->get_parameter("end_effector_profile.load.mass").as_double();
+    end_effector_load_compensation_.mass = get_node()->get_parameter("end_effector_profile.load.mass").as_double();
     loaded_from_local_params = true;
   } catch (const std::exception&) {
-    load_mass_ = 0.0;
+    end_effector_load_compensation_.mass = 0.0;
   }
 
-  const auto com = get_optional_double_array(get_node(), "end_effector_profile.load.center_of_mass");
+  const auto com = parameter_utils::get_optional_double_array(get_node(), "end_effector_profile.load.center_of_mass");
   if (com.size() == 3) {
-    load_center_of_mass_ << com[0], com[1], com[2];
+    end_effector_load_compensation_.center_of_mass << com[0], com[1], com[2];
     loaded_from_local_params = true;
   }
 
-  const auto inertia = get_optional_double_array(get_node(), "end_effector_profile.load.inertia");
+  const auto inertia = parameter_utils::get_optional_double_array(get_node(), "end_effector_profile.load.inertia");
   if (inertia.size() == 9) {
     Eigen::Map<const Eigen::Matrix<double, 3, 3, Eigen::ColMajor>> inertia_map(inertia.data());
-    load_inertia_ = inertia_map;
+    end_effector_load_compensation_.inertia = inertia_map;
     loaded_from_local_params = true;
   }
 
-  if (!end_effector_profile_node_.empty() &&
+  // Query the remote profile node only when load compensation is requested.
+  // This keeps end-effector profile lookup optional for controllers that do not
+  // use load compensation.
+  if (compensation_requested && !end_effector_profile_node_.empty() &&
       fetchEndEffectorLoadParametersFromNode(end_effector_profile_node_)) {
     loaded_from_local_params = true;
   }
 
-  compensate_end_effector_load_ =
-    compensate_end_effector_load_ && std::isfinite(load_mass_) && load_mass_ > 0.0;
+  end_effector_load_compensation_.enabled =
+    end_effector_load_compensation_.enabled && std::isfinite(end_effector_load_compensation_.mass) && end_effector_load_compensation_.mass > 0.0;
 
-  if (compensate_end_effector_load_) {
+  if (end_effector_load_compensation_.enabled) {
     RCLCPP_INFO_STREAM(get_node()->get_logger(),
-                       "End-effector load compensation enabled: mass=" << load_mass_
-                       << " kg, COM=[" << load_center_of_mass_.transpose()
+                       "End-effector load compensation enabled: mass=" << end_effector_load_compensation_.mass
+                       << " kg, COM=[" << end_effector_load_compensation_.center_of_mass.transpose()
                        << "]");
   } else if (loaded_from_local_params) {
     RCLCPP_INFO(get_node()->get_logger(),
                 "End-effector profile loaded, but load compensation is disabled or mass is zero.");
+  } else if (compensation_requested) {
+    RCLCPP_WARN(get_node()->get_logger(),
+                "End-effector load compensation requested but no valid profile was found. Continuing without load compensation.");
   } else {
     RCLCPP_DEBUG(get_node()->get_logger(), "No end-effector load profile parameters found.");
   }
@@ -342,24 +408,24 @@ bool GenericCartesianControllerWrapper::fetchEndEffectorLoadParametersFromNode(c
       found = true;
       if (parameter.get_name() == "end_effector_profile.load.mass" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
-        load_mass_ = parameter.as_double();
+        end_effector_load_compensation_.mass = parameter.as_double();
       } else if (parameter.get_name() == "end_effector_profile.load.center_of_mass" &&
                  parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY &&
                  parameter.as_double_array().size() == 3) {
         const auto values = parameter.as_double_array();
-        load_center_of_mass_ << values[0], values[1], values[2];
+        end_effector_load_compensation_.center_of_mass << values[0], values[1], values[2];
       } else if (parameter.get_name() == "end_effector_profile.load.inertia" &&
                  parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY &&
                  parameter.as_double_array().size() == 9) {
         const auto values = parameter.as_double_array();
         Eigen::Map<const Eigen::Matrix<double, 3, 3, Eigen::ColMajor>> inertia_map(values.data());
-        load_inertia_ = inertia_map;
+        end_effector_load_compensation_.inertia = inertia_map;
       } else if (parameter.get_name() == "end_effector_profile.load.gravity_acceleration" &&
                  parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
-        load_gravity_acceleration_ = parameter.as_double();
+        end_effector_load_compensation_.gravity_acceleration = parameter.as_double();
       } else if (parameter.get_name() == "compensate_end_effector_load" &&
                  parameter.get_type() == rclcpp::ParameterType::PARAMETER_BOOL) {
-        compensate_end_effector_load_ = parameter.as_bool();
+        end_effector_load_compensation_.enabled = parameter.as_bool();
       }
     }
     return found;
@@ -390,6 +456,11 @@ bool GenericCartesianControllerWrapper::instantiateImplementation(std::string& e
   }
   impl_ = create_fn(num_joints_);
   if(!impl_) { err = "Factory returned null"; if (impl_handle_) { dlclose(impl_handle_); impl_handle_=nullptr; } destroy_fn_=nullptr; name_fn_=nullptr; return false; }
+
+  // Forward all declared ROS parameters directly to the implementation.
+  // Implementations are responsible for parsing what they need and ignoring the rest.
+  forward_all_parameters_to_impl(get_node(), impl_);
+
   RCLCPP_INFO(get_node()->get_logger(), "Loaded controller impl '%s' with %d joints", name_fn_?name_fn_():"<unknown>", num_joints_);
   // Provide robot model pointer prior to initialize so impl can seed if desired
   if (impl_) { impl_->setRobotModel(static_cast<void*>(&robot_model_)); }
@@ -411,6 +482,8 @@ CallbackReturn GenericCartesianControllerWrapper::on_activate(const rclcpp_lifec
   robot_model_.update(state_buffer_.q);
   robot_model_.getPose(state_buffer_.position, state_buffer_.orientation);
   active_since_ = get_node()->get_clock()->now();
+  first_update_logged_ = false;
+  diagnostic_logger_.start();
 
   control::ControlCommand init_cmd(static_cast<size_t>(num_joints_));
   init_cmd.position = state_buffer_.position;
@@ -429,21 +502,31 @@ CallbackReturn GenericCartesianControllerWrapper::on_activate(const rclcpp_lifec
   rt_cartesian_cmd_buffer_.writeFromNonRT(init_cmd);
 
   tau_out_.resize(num_joints_);
-  impl_->step(init_cmd, state_buffer_, tau_out_, 0.001);
-
-  RCLCPP_INFO(get_node()->get_logger(), "Controller wrapper activated, calling step() from %s", name_fn_?name_fn_():"<unknown>");
-  RCLCPP_INFO(get_node()->get_logger(), "Command interfaces: expected=%d actual=%zu", num_joints_, command_interfaces_.size());
-  for (size_t i = 0; i < command_interfaces_.size(); ++i) {
-    RCLCPP_INFO(get_node()->get_logger(), "  cmd_if[%zu]: %s", i, command_interfaces_[i].get_name().c_str());
+  const bool init_step_ok = impl_ && impl_->step(init_cmd, state_buffer_, tau_out_, 0.001);
+  if (!init_step_ok) {
+    RCLCPP_ERROR(get_node()->get_logger(),
+                 "Controller impl '%s' failed during activation step(); refusing activation.",
+                 name_fn_ ? name_fn_() : "<unknown>");
+    for (auto & ci : command_interfaces_) {
+      ci.set_value(0.0);
+    }
+    return CallbackReturn::ERROR;
   }
+
+  logActivationSummary();
   RCLCPP_DEBUG_STREAM(get_node()->get_logger(), "Initial q: " << state_buffer_.q.transpose() << " | tau: " << state_buffer_.tau.transpose() << " | ee: [" << state_buffer_.position.transpose() << "]");
   
   return CallbackReturn::SUCCESS;
 }
 
 CallbackReturn GenericCartesianControllerWrapper::on_deactivate(const rclcpp_lifecycle::State & /*previous_state*/) {
+  diagnostic_logger_.stop();
   for (auto & ci : command_interfaces_) { ci.set_value(0.0); }
   return CallbackReturn::SUCCESS;
+}
+
+void GenericCartesianControllerWrapper::diagnostic_mode_callback(const std_msgs::msg::Int32::SharedPtr msg) {
+  diagnostic_logger_.setMode(msg->data);
 }
 
 void GenericCartesianControllerWrapper::cartesian_command_callback(const compliant_controllers_msgs::msg::CartesianCommand::SharedPtr msg) {
@@ -543,33 +626,30 @@ void GenericCartesianControllerWrapper::cartesian_command_callback(const complia
   // print all cmd fields
   std::ostringstream oss;
   oss << "Received CartesianCommand:\n";
-  // oss << "  position: [" << cmd.position.x() << ", " << cmd.position.y() << ", " << cmd.position.z() << "]\n";
-  // oss << "  orientation: [" << cmd.orientation.w() << ", " << cmd.orientation.x() << ", " << cmd.orientation.y() << ", " << cmd.orientation.z() << "]\n";
-  // oss << "  velocity: " << cmd.velocity.transpose() << "\n";
-  // oss << "  wrench: " << cmd.wrench.transpose() << "\n";
-  // oss << "  stiffness:\n" << cmd.stiffness << "\n";
-  // oss << "  damping:\n" << cmd.damping << "\n";
-  // oss << "  nullspace desired position: " << cmd.q_ns_des.transpose() << "\n";
-  // oss << "  nullspace stiffness: " << cmd.k_ns.transpose() << "\n";
-  // oss << "  nullspace damping: " << cmd.d_ns.transpose() << "\n";
-  // oss << "  torque feedforward: " << cmd.tau_ff.transpose() << "\n";  
+  oss << "  position: [" << cmd.position.x() << ", " << cmd.position.y() << ", " << cmd.position.z() << "]\n";
+  oss << "  orientation: [" << cmd.orientation.w() << ", " << cmd.orientation.x() << ", " << cmd.orientation.y() << ", " << cmd.orientation.z() << "]\n";
+  oss << "  velocity: " << cmd.velocity.transpose() << "\n";
+  oss << "  wrench: " << cmd.wrench.transpose() << "\n";
+  oss << "  stiffness:\n" << cmd.stiffness << "\n";
+  oss << "  damping:\n" << cmd.damping << "\n";
+  oss << "  nullspace desired position: " << cmd.q_ns_des.transpose() << "\n";
+  oss << "  nullspace stiffness: " << cmd.k_ns.transpose() << "\n";
+  oss << "  nullspace damping: " << cmd.d_ns.transpose() << "\n";
+  oss << "  torque feedforward: " << cmd.tau_ff.transpose() << "\n";  
   RCLCPP_DEBUG(get_node()->get_logger(), "%s", oss.str().c_str());
 
   rt_cartesian_cmd_buffer_.writeFromNonRT(cmd);
 
 }
 
-controller_interface::return_type GenericCartesianControllerWrapper::update(const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/) {
+controller_interface::return_type GenericCartesianControllerWrapper::update(const rclcpp::Time & /*time*/, const rclcpp::Duration & period) {
 
   readControllerState(state_buffer_);   // updates joint positions, velocities, and torques from hardware interface
   const bool model_ok = robot_model_.update(state_buffer_.q); // passes current joint positions to the robot model
   if (!model_ok) {
     RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
                           "RobotModel update failed; writing zero torque for this cycle.");
-    tau_out_.setZero();
-    for (int i = 0; i < num_joints_; ++i) {
-      command_interfaces_[i].set_value(0.0);
-    }
+    writeZeroTorques();
     return controller_interface::return_type::OK;
   }
 
@@ -581,27 +661,44 @@ controller_interface::return_type GenericCartesianControllerWrapper::update(cons
   // read latest command from RT buffer and pass it to the implementation
   const control::ControlCommand* latest_cmd = rt_cartesian_cmd_buffer_.readFromRT();
   // call step function of the controller implementation, returning control output torques
-  impl_->step(*latest_cmd, state_buffer_, tau_out_, 0.001);
-
-  // Add gravity compensation if enabled (UR robots need this, Franka does it in hardware)
-  if (add_gravity_compensation_) {
-    Eigen::VectorXd g = Eigen::VectorXd::Zero(num_joints_);
-    if (robot_model_.getGravity(g)) {
-      if (!g.array().isFinite().all()) {
-        RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
-                              "Non-finite gravity torque detected; disabling gravity compensation.");
-        add_gravity_compensation_ = false;
-      } else {
-        tau_out_ += g;
-      }
-    } else {
-      RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
-                           "Gravity vector unavailable; skipping gravity compensation this cycle.");
-    }
+  const bool step_ok = impl_ && impl_->step(*latest_cmd, state_buffer_, tau_out_, 0.001);
+  if (!step_ok) {
+    RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+                          "Controller impl '%s' reported step() failure; writing zero torque and returning ERROR.",
+                          name_fn_ ? name_fn_() : "<unknown>");
+    writeZeroTorques();
+    return controller_interface::return_type::ERROR;
   }
-  addEndEffectorLoadCompensation();
 
-  // Sanitize denormal/near-zero values and cap extreme torques before write.
+  addGravityCompensation();
+  addEndEffectorLoadCompensation();
+  addFrictionCompensation(period.seconds());
+  sanitizeTorqueOutput();
+  if (diagnostic_logger_.enabled()) {
+    updateDiagnosticModelTerms();
+    diagnostic_logger_.record(get_node()->get_clock()->now().seconds(),
+                              state_buffer_.q,
+                              state_buffer_.dq,
+                              state_buffer_.tau,
+                              tau_out_,
+                              diagnostic_gravity_,
+                              diagnostic_coriolis_,
+                              diagnostic_inertia_);
+  }
+  writeTorqueOutput();
+  logFirstUpdateSummary();
+
+  return controller_interface::return_type::OK;
+}
+
+void GenericCartesianControllerWrapper::writeZeroTorques() {
+  tau_out_.setZero();
+  for (int i = 0; i < num_joints_; ++i) {
+    command_interfaces_[i].set_value(0.0);
+  }
+}
+
+void GenericCartesianControllerWrapper::sanitizeTorqueOutput() {
   constexpr double kTauDeadband = 1e-9;
   constexpr double kTauAbsMaxWrite = 120.0;
   for (int i = 0; i < num_joints_; ++i) {
@@ -619,8 +716,9 @@ controller_interface::return_type GenericCartesianControllerWrapper::update(cons
       }
     }
   }
+}
 
-  //tau_out_.setZero();
+void GenericCartesianControllerWrapper::writeTorqueOutput() {
   for (int i = 0; i < num_joints_; ++i) {
     const double tau_i = tau_out_(i);
     if (!std::isfinite(tau_i)) {
@@ -631,43 +729,89 @@ controller_interface::return_type GenericCartesianControllerWrapper::update(cons
       command_interfaces_[i].set_value(tau_i);
     }
   }
+}
 
-  return controller_interface::return_type::OK;
+void GenericCartesianControllerWrapper::updateDiagnosticModelTerms() {
+  diagnostic_gravity_.setZero();
+  diagnostic_coriolis_.setZero();
+  diagnostic_inertia_.setZero();
+  robot_model_.getGravity(diagnostic_gravity_);
+  robot_model_.getCoriolis(state_buffer_.dq, diagnostic_coriolis_);
+  robot_model_.getMassMatrix(diagnostic_inertia_);
+}
+
+void GenericCartesianControllerWrapper::addGravityCompensation() {
+  if (!gravity_compensation_.enabled) {
+    return;
+  }
+  if (gravity_compensation_.tau.size() != num_joints_) {
+    RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+                          "Gravity torque buffer has invalid size; disabling gravity compensation.");
+    gravity_compensation_.enabled = false;
+    return;
+  }
+  if (!robot_model_.getGravity(gravity_compensation_.tau)) {
+    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+                         "Gravity vector unavailable; skipping gravity compensation this cycle.");
+    return;
+  }
+  if (!gravity_compensation_.tau.array().isFinite().all()) {
+    RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+                          "Non-finite gravity torque detected; disabling gravity compensation.");
+    gravity_compensation_.enabled = false;
+    return;
+  }
+  tau_out_ += gravity_compensation_.tau;
+}
+
+void GenericCartesianControllerWrapper::addFrictionCompensation(double dt) {
+  if (!friction_compensation_.add(state_buffer_.q, state_buffer_.dq, dt, tau_out_)) {
+    RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+                          "Friction compensation failed; disabling compensation.");
+  }
 }
 
 void GenericCartesianControllerWrapper::addEndEffectorLoadCompensation() {
-  if (!compensate_end_effector_load_) {
+  if (!end_effector_load_compensation_.enabled) {
     return;
   }
 
-  if (load_jacobian_.cols() != num_joints_) {
-    load_jacobian_.resize(6, num_joints_);
+  if (end_effector_load_compensation_.jacobian.cols() != num_joints_) {
+    RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+                          "End-effector load Jacobian has invalid size; skipping compensation.");
+    return;
   }
-  load_jacobian_.setZero();
-  if (!robot_model_.getJacobian(load_jacobian_)) {
+  if (end_effector_load_compensation_.tau.size() != num_joints_) {
+    RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+                          "End-effector load torque buffer has invalid size; skipping compensation.");
+    return;
+  }
+  end_effector_load_compensation_.jacobian.setZero();
+  if (!robot_model_.getJacobian(end_effector_load_compensation_.jacobian)) {
     RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
                          "End-effector load compensation skipped because Jacobian is unavailable.");
     return;
   }
 
   const Eigen::Vector3d com_world =
-    state_buffer_.orientation.toRotationMatrix() * load_center_of_mass_;
+    state_buffer_.orientation.toRotationMatrix() * end_effector_load_compensation_.center_of_mass;
   const Eigen::Vector3d gravity_force_world(
-    0.0, 0.0, load_mass_ * load_gravity_acceleration_);
-  load_wrench_.head<3>() = gravity_force_world;
-  load_wrench_.tail<3>() = com_world.cross(gravity_force_world);
+    0.0, 0.0, end_effector_load_compensation_.mass * end_effector_load_compensation_.gravity_acceleration);
+  end_effector_load_compensation_.wrench.head<3>() = gravity_force_world;
+  end_effector_load_compensation_.wrench.tail<3>() = com_world.cross(gravity_force_world);
 
-  const Eigen::VectorXd tau_load = load_jacobian_.transpose() * load_wrench_;
-  if (!tau_load.array().isFinite().all()) {
+  end_effector_load_compensation_.tau.noalias() =
+    end_effector_load_compensation_.jacobian.transpose() * end_effector_load_compensation_.wrench;
+  if (!end_effector_load_compensation_.tau.array().isFinite().all()) {
     RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
                           "Non-finite end-effector load torque detected; skipping compensation.");
     return;
   }
   RCLCPP_DEBUG_STREAM_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
                                "End-effector load compensation: wrench=["
-                               << load_wrench_.transpose() << "], tau=["
-                               << tau_load.transpose() << "]");
-  tau_out_ += tau_load;
+                               << end_effector_load_compensation_.wrench.transpose() << "], tau=["
+                               << end_effector_load_compensation_.tau.transpose() << "]");
+  tau_out_ += end_effector_load_compensation_.tau;
 }
 
 
