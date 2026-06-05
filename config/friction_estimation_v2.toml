@@ -1,5 +1,0 @@
-csv_file = "/tmp/friction_estimation_measurements_v2.csv"
-amplitude_scaling = 0.3
-q_min = [-2.8973, -1.8325, -2.8973, -3.0717, -2.8797, -0.4363, -3.0543]
-q_max = [2.8973, 1.8325, 2.8973, -0.1221, 2.8797, 4.6251, 3.0543]
-test_joint_indices = [1, 2, 3, 4, 5, 6, 7]

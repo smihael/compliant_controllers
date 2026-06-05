@@ -5,7 +5,7 @@
 #include <string>
 #include <memory>
 
-#include <compliant_controllers/robot_model.hpp>
+#include <ros2_control_robot_dynamics/robot_model.hpp>
 
 namespace compliant_controllers {
 

@@ -52,13 +52,13 @@ This means controllers that require **both position and effort command interface
 - FR3 (real robot):
 
 ```bash
-ros2 launch compliant_controllers fr3.launch.py controller_name:=cartesian_impedance_controller
+ros2 launch compliant_controllers_demos fr3.launch.py controller_name:=cartesian_impedance_controller
 ```
 
 - FR3 in Gazebo (ros_gz_sim): defaults `show_gazebo_gui:=false`, `show_rviz:=true`.
 
 ```bash
-ros2 launch compliant_controllers fr3_gz.launch.py \
+ros2 launch compliant_controllers_demos fr3_gz.launch.py \
   controller_name:=cartesian_impedance_controller \
   show_gazebo_gui:=true \
   publish_world_to_base:=true
@@ -67,18 +67,18 @@ ros2 launch compliant_controllers fr3_gz.launch.py \
 - UR (upstream ur_description, version 2.9.0, Gazebo Sim): adds `<command_interface name="effort"/>` to all six joints and rewrites `ign_ros2_control/IgnitionSystem` to `gz_ros2_control/GazeboSimSystem`. Defaults: `ur_type:=ur5e`, `controllers_file:=ur_gz_controllers.yaml`, `initial_joint_controller:=cartesian_impedance_controller`, `launch_rviz:=true`, `gazebo_gui:=true`.
 
 ```bash
-ros2 launch compliant_controllers ur_gz.launch.py ur_type:=ur10e
+ros2 launch compliant_controllers_demos ur_gz.launch.py ur_type:=ur10e
 
 # Headless and alternate controller examples
-ros2 launch compliant_controllers ur_gz.launch.py ur_type:=ur10e launch_rviz:=false gazebo_gui:=false
-ros2 launch compliant_controllers ur_gz.launch.py ur_type:=ur10e initial_joint_controller:=joint_trajectory_controller
+ros2 launch compliant_controllers_demos ur_gz.launch.py ur_type:=ur10e launch_rviz:=false gazebo_gui:=false
+ros2 launch compliant_controllers_demos ur_gz.launch.py ur_type:=ur10e initial_joint_controller:=joint_trajectory_controller
 ```
 
-- LBR (IIWA/MED) in Gazebo with effort command interfaces: generates URDF with `mode:=mock`, swaps `mock_components/GenericSystem` for `gz_ros2_control/GazeboSimSystem`, and injects plugin config. Defaults: `model:=iiwa14`, `ctrl:=iiwa14_arm_controller`, controller config `config/lbr_gz_controllers.yaml`.
+- LBR (IIWA/MED) in Gazebo with effort command interfaces: generates URDF with `mode:=mock`, swaps `mock_components/GenericSystem` for `gz_ros2_control/GazeboSimSystem`, and injects plugin config. Defaults: `model:=iiwa14`, `ctrl:=cartesian_impedance_controller`, controller config `config/lbr_gz_controllers.yaml`.
 
 ```bash
-ros2 launch compliant_controllers lbr_gazebo.launch.py model:=iiwa7 ctrl:=cartesian_impedance_controller
-ros2 launch compliant_controllers lbr_gazebo.launch.py model:=med14 ctrl:=lbr_torque_command_controller log_level:=debug
+ros2 launch compliant_controllers_demos lbr_gazebo.launch.py model:=iiwa7 ctrl:=cartesian_impedance_controller
+ros2 launch compliant_controllers_demos lbr_gazebo.launch.py model:=med14 ctrl:=lbr_torque_command_controller log_level:=debug
 ```
 
 ### Verify Controllers and Interfaces
@@ -220,13 +220,13 @@ export FRICTION_ESTIMATION_TAU_LIMIT_NM=20.0
 Launch with:
 
 ```bash
-ros2 launch compliant_controllers fr3.launch.py controller_name:=friction_estimation_controller
+ros2 launch compliant_controllers_demos fr3.launch.py controller_name:=friction_estimation_controller
 ```
 
 or use the dedicated launch file with direct friction arguments:
 
 ```bash
-ros2 launch compliant_controllers fr3_friction_estimation.launch.py \
+ros2 launch compliant_controllers_demos fr3_friction_estimation_v2.launch.py \
   robot_ip:=192.168.1.1 \
   start_joint:=1 end_joint:=7 \
   q_init:="0,-0.785398,0,-2.356194,0,1.570796,0.785398" \
@@ -240,11 +240,10 @@ ros2 launch compliant_controllers fr3_friction_estimation.launch.py \
 Per-joint timing/amplitude overrides via launch:
 
 ```bash
-ros2 launch compliant_controllers fr3_friction_estimation.launch.py \
+ros2 launch compliant_controllers_demos fr3_friction_estimation_v2.launch.py \
   durations_sec:="20,20,20,20,20,20,20" \
   amplitudes_rad:="0.25,0.2,0.25,0.2,0.2,0.2,0.2"
 ```
 
 `plot_friction_results.m` can still be used for per-joint inspection from the generated sample CSV.
-
 

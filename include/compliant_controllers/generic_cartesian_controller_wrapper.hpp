@@ -14,8 +14,8 @@
 #include <compliant_controllers_msgs/msg/cartesian_command.hpp>
 #include <compliant_controllers/async_diagnostic_logger.hpp>
 #include <compliant_controllers/friction_compensation.hpp>
-#include <compliant_controllers/robot_description_loader.hpp>
-#include <compliant_controllers/robot_model.hpp>
+#include <ros2_control_robot_dynamics/robot_description_loader.hpp>
+#include <ros2_control_robot_dynamics/robot_model.hpp>
 #include <compliant_controllers/cartesian_impedance_impl.hpp>
 #include <control/AbstractController.hpp> // Requires implementations define static constexpr kName
 

@@ -29,20 +29,7 @@ find_package(compliant_controllers_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(pinocchio REQUIRED)
 find_package(ament_index_cpp REQUIRED)
-
-# Robot model implementation library (encapsulates pinocchio usage)
-add_library(robot_model_impl SHARED
-  src/robot_model.cpp
-)
-
-target_include_directories(robot_model_impl PUBLIC
-  include
-  ${EIGEN3_INCLUDE_DIRS}
-)
-
-ament_target_dependencies(robot_model_impl
-  pinocchio
-)
+find_package(ros2_control_robot_dynamics REQUIRED)
 
 add_library(cartesian_impedance_impl SHARED
   src/cartesian_impedance_impl.cpp
@@ -53,12 +40,11 @@ target_include_directories(cartesian_impedance_impl PUBLIC
   ${EIGEN3_INCLUDE_DIRS}
 )
 
-# Keep this implementation library minimal; only link required internal and math deps.
-target_link_libraries(cartesian_impedance_impl
-  PUBLIC robot_model_impl
+ament_target_dependencies(cartesian_impedance_impl
+  ros2_control_robot_dynamics
 )
 if(UNIX)
-  target_link_libraries(cartesian_impedance_impl PRIVATE dl)
+  target_link_libraries(cartesian_impedance_impl dl)
 endif()
 
 add_library(friction_estimation_impl_v2 SHARED
@@ -72,10 +58,7 @@ target_include_directories(friction_estimation_impl_v2 PUBLIC
 
 ament_target_dependencies(friction_estimation_impl_v2
   rclcpp
-)
-
-target_link_libraries(friction_estimation_impl_v2
-  robot_model_impl
+  ros2_control_robot_dynamics
 )
 
 if(UNIX)
@@ -87,7 +70,6 @@ add_library(${PROJECT_NAME} SHARED
   src/async_diagnostic_logger.cpp
   src/friction_compensation.cpp
   src/generic_cartesian_controller_wrapper.cpp 
-  src/robot_description_loader.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -110,19 +92,20 @@ ament_target_dependencies(${PROJECT_NAME}
   compliant_controllers_msgs
   pinocchio # transitively for interface if needed (Jacobian types)
   ament_index_cpp
+  ros2_control_robot_dynamics
 )
 
 # Standalone implementation library exposing factory symbols for dynamic loading
 
 # Link wrapper with implementation libs
-target_link_libraries(${PROJECT_NAME} cartesian_impedance_impl robot_model_impl)
+target_link_libraries(${PROJECT_NAME} cartesian_impedance_impl)
 if(UNIX)
   target_link_libraries(${PROJECT_NAME} dl)
 endif()
 
 pluginlib_export_plugin_description_file(controller_interface compliant_controllers.xml)
 
-install(TARGETS robot_model_impl cartesian_impedance_impl friction_estimation_impl_v2 ${PROJECT_NAME}
+install(TARGETS cartesian_impedance_impl friction_estimation_impl_v2 ${PROJECT_NAME}
   EXPORT export_${PROJECT_NAME}
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
@@ -149,13 +132,9 @@ install(PROGRAMS
 install(DIRECTORY launch/
   DESTINATION share/${PROJECT_NAME}/launch
 )
-install(
-  DIRECTORY config/
-  DESTINATION share/${PROJECT_NAME}/config
-)
 
 ament_export_include_directories(include)
-ament_export_libraries(${PROJECT_NAME} cartesian_impedance_impl friction_estimation_impl_v2 robot_model_impl)
-ament_export_dependencies(controller_interface pluginlib rclcpp rclcpp_lifecycle hardware_interface pinocchio ament_index_cpp)
+ament_export_libraries(${PROJECT_NAME} cartesian_impedance_impl friction_estimation_impl_v2)
+ament_export_dependencies(controller_interface pluginlib rclcpp rclcpp_lifecycle hardware_interface pinocchio ament_index_cpp ros2_control_robot_dynamics)
 
 ament_package()
