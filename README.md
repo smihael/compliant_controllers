@@ -16,8 +16,12 @@ Thus, the controller logic is fully separated from ROS and the robot. This keeps
 
 ## Build and Source
 
+Build from the workspace root:
+
 ```bash
-colcon build --packages-select compliant_controllers --symlink-install
+cd ~/local_ws
+source install/setup.bash
+colcon build --packages-select compliant_controllers --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF --symlink-install
 source install/setup.bash
 ```
 
@@ -26,17 +30,38 @@ You can also build using:
 docker build \
   --ssh default=$SSH_AUTH_SOCK \
   --network=host \
-  -t smihael/compliant-controllers:$(date +"%Y%m%d_%H%M") \
+  -t compliant-controllers:$(date +"%Y%m%d_%H%M") \
   .
-docker tag smihael/compliant-controllers:$(date +"%Y%m%d_%H%M") smihael/compliant-controllers:latest 
+docker tag compliant-controllers:$(date +"%Y%m%d_%H%M") compliant-controllers:latest 
 ```
 
-Once built, I recommend using [rocker](https://github.com/osrf/rocker) for testing:
+The Docker image builds the dependency workspaces first (`franka_ws`, `lbr_ws`, and `controllers_ws`) and sources their install spaces in interactive shells.
+For local overlay work with the current checkout mounted into the container:
+
 ```bash
-rocker --devices /dev/dri --x11 --pulse --user --network=host --home --image-name smihael/compliant-controllers:latest compliant-controllers-rocker
+USER_UID=$(id -u) USER_GID=$(id -g) docker compose run --rm controllers
+# Inside the container:
+colcon build --packages-select compliant_controllers --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF --symlink-install
+source install/setup.bash
 ```
 
-This will build a minimal overlay with necessary libraries and hacks to enable access to host window manager, mount your home directory, and forward hardware interfaces like GPU, audio, and input devices into the container for seamless desktop and device integration. You can execute further commands using `docker exec -it compliant-controllers-rocker bash`.
+For desktop/GPU testing with [rocker](https://github.com/osrf/rocker):
+```bash
+rocker --devices /dev/dri --x11 --pulse --user --network=host --home \
+  --image-name compliant-controllers-rocker \
+  compliant-controllers:rr-dev
+```
+
+This builds a minimal overlay with host window-manager access, home-directory
+mounting, and GPU/audio/input forwarding. You can enter the running container
+with:
+
+```bash
+docker exec -it compliant-controllers-rocker bash
+```
+
+Rocker is useful for visualization and simulation, but the plain command above
+does not grant all permissions required by some platforms. This includes `SYS_NICE`, realtime ulimits, host networking, host IPC, and `/dev` access.
 
 ## gz_ros2_control adjustments 
 
@@ -52,7 +77,7 @@ This means controllers that require **both position and effort command interface
 - FR3 (real robot):
 
 ```bash
-ros2 launch compliant_controllers_demos fr3.launch.py controller_name:=cartesian_impedance_controller
+ros2 launch compliant_controllers_demos fr3.launch.py
 ```
 
 - FR3 in Gazebo (ros_gz_sim): defaults `show_gazebo_gui:=false`, `show_rviz:=true`.
@@ -83,20 +108,10 @@ ros2 launch compliant_controllers_demos lbr_gazebo.launch.py model:=med14 ctrl:=
 
 ### Verify Controllers and Interfaces
 
-- UR / FR3 Gazebo: controller manager at `/controller_manager`
-
 ```bash
-ros2 control list_hardware_interfaces --controller-manager /controller_manager
-ros2 control list_controllers --controller-manager /controller_manager
+ros2 control list_hardware_interfaces --controller-manager /ns/controller_manager
+ros2 control list_controllers --controller-manager /ns/controller_manager
 ```
-
-- LBR Gazebo: controller manager is namespaced by `robot_name`/`model` (default `lbr`)
-
-```bash
-ros2 control list_hardware_interfaces --controller-manager /lbr/controller_manager
-ros2 control list_controllers --controller-manager /lbr/controller_manager
-```
-
 
 ### Testing Cartesian Commands
 
@@ -149,101 +164,3 @@ ros2 run compliant_controllers test_cartesian_command.py \
 - `tf_prefix_delim` (string): Delimiter between prefix and frame name (`/` or `_`). Default: `/`
 - `dx`, `dy`, `dz` (double): Cartesian position offsets [m]. Default: `0.0, 0.0, 0.05`
 - `k_lin`, `k_rot` (double): Linear and rotational stiffness. Default: `300.0, 20.0`
-
-## Friction Estimation Measurement Plugin
-
-Use the same wrapper plugin, but set:
-
-```yaml
-impl_library: libfriction_estimation_impl.so
-```
-
-An example controller entry is included in `config/fr3_controllers.yaml` as `friction_estimation_controller`.
-
-At runtime, the plugin now runs the complete friction pipeline internally (no external orchestration script required):
-
-1. Move robot to `q_init`.
-2. Settle at `q_init`.
-3. Excite one joint while holding all others at `q_init`.
-4. Return to `q_init` and settle.
-5. Repeat for each selected joint.
-6. Export raw samples and estimated friction parameter matrices.
-
-The excitation follows the `friction_estimation.mdl` Motion Gen structure:
-
-1. Four sine components with amplitudes `pi/16`, `pi/8`, `pi/4`, `pi/2` at base frequency 1 Hz (`2*pi`).
-2. Each component is gated by a saturating ramp with starts `[1, 2.5, 5, 10]` and slopes `[1, 0.5, 0.25, 0.1]`.
-3. Joint-specific scaling from the MATLAB function block is applied (`joint 2: x0.5`, `joint 4/6: x2/3`, others unchanged).
-4. The scalar profile is composed into a 7D vector by writing only the selected joint entry.
-
-CSV columns:
-
-```text
-t,active_joint,excitation,q,dq,tau_measured,tau_commanded,q_des,dq_des,sine_tau_ff
-```
-
-At the end of the run, the plugin also writes:
-
-- `model1_estimated_friction.csv`: columns `joint,fv,fc,fo`
-- `model2_estimated_friction.csv`: columns `joint,hysteresis,fv_p,fc_p,fv_n,fc_n`
-- `friction_estimated_friction.m`: MATLAB-ready variables `q_init`, `model1_estimated_friction`, `model2_estimated_friction`
-
-Configure via environment variables before launch:
-
-```bash
-export TEST_JOINT_INDEX=7
-# Optional alias: FRICTION_ESTIMATION_TEST_JOINT_INDEX
-export FRICTION_ESTIMATION_OUTPUT_DIR=/tmp
-# Optional explicit file path override:
-# export FRICTION_ESTIMATION_OUTPUT=/tmp/friction_results_joint7_custom.csv
-export FRICTION_ESTIMATION_Q_INIT="0,-0.785398,0,-2.356194,0,1.570796,0.785398"
-export FRICTION_ESTIMATION_START_JOINT=1
-export FRICTION_ESTIMATION_END_JOINT=7
-export FRICTION_ESTIMATION_SETTLE_SEC=1.0
-export FRICTION_ESTIMATION_RETURN_SETTLE_SEC=1.0
-export FRICTION_ESTIMATION_MEASURE_SEC=20.0
-export FRICTION_ESTIMATION_AMPLITUDE_RAD=0.25
-# Optional per-joint overrides (7 values):
-# export FRICTION_ESTIMATION_AMPLITUDES_RAD="0.25,0.2,0.25,0.2,0.2,0.2,0.2"
-# export FRICTION_ESTIMATION_DURATIONS_SEC="20,20,20,20,20,20,20"
-export FRICTION_ESTIMATION_FREQ_HZ=0.25
-export FRICTION_ESTIMATION_TAU_FF_NM=0.0
-export FRICTION_ESTIMATION_HOLD_KP=50.0
-export FRICTION_ESTIMATION_HOLD_KD=5.0
-export FRICTION_ESTIMATION_TAU_LIMIT_NM=20.0
-# Optional explicit outputs:
-# export FRICTION_ESTIMATION_MODEL1_OUTPUT=/tmp/model1_estimated_friction.csv
-# export FRICTION_ESTIMATION_MODEL2_OUTPUT=/tmp/model2_estimated_friction.csv
-# export FRICTION_ESTIMATION_MATLAB_OUTPUT=/tmp/friction_estimated_friction.m
-```
-
-Launch with:
-
-```bash
-ros2 launch compliant_controllers_demos fr3.launch.py controller_name:=friction_estimation_controller
-```
-
-or use the dedicated launch file with direct friction arguments:
-
-```bash
-ros2 launch compliant_controllers_demos fr3_friction_estimation_v2.launch.py \
-  robot_ip:=192.168.1.1 \
-  start_joint:=1 end_joint:=7 \
-  q_init:="0,-0.785398,0,-2.356194,0,1.570796,0.785398" \
-  settle_sec:=1.0 return_settle_sec:=1.0 measure_sec:=20.0 \
-  move_max_vel_rad_s:=0.08 move_tau_limit_nm:=4.0 \
-  move_kp_scale:=0.15 move_kd_scale:=0.30 \
-  amplitude_rad:=0.25 freq_hz:=0.25 \
-  output_dir:=/tmp/friction_run
-```
-
-Per-joint timing/amplitude overrides via launch:
-
-```bash
-ros2 launch compliant_controllers_demos fr3_friction_estimation_v2.launch.py \
-  durations_sec:="20,20,20,20,20,20,20" \
-  amplitudes_rad:="0.25,0.2,0.25,0.2,0.2,0.2,0.2"
-```
-
-`plot_friction_results.m` can still be used for per-joint inspection from the generated sample CSV.
-

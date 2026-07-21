@@ -28,10 +28,6 @@ public:
            double dt,
            Eigen::Ref<Eigen::VectorXd> tau_out);
 
-  bool add(const Eigen::VectorXd& dq, Eigen::Ref<Eigen::VectorXd> tau_out) {
-    return add(empty_q_, dq, 0.001, tau_out);
-  }
-
 private:
   bool enabled_{false};
   std::string model_name_{"disabled"};

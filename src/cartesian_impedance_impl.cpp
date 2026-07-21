@@ -30,6 +30,10 @@ CartesianImpedanceImpl::CartesianImpedanceImpl(int num_joints) : num_joints_(num
 
 Eigen::Vector3d CartesianImpedanceImpl::q_log(const Eigen::Quaterniond &q) const {
   Eigen::Quaterniond qn = q.normalized();
+  // q and -q encode the same orientation; use the shortest rotation.
+  if (qn.w() < 0.0) {
+    qn.coeffs() *= -1.0;
+  }
   double w = std::clamp(qn.w(), -1.0, 1.0);
   double angle = 2.0 * std::acos(w);
   double s = std::sqrt(1 - w * w);

@@ -18,8 +18,11 @@
   <depend>rclcpp_lifecycle</depend>
   <depend>realtime_tools</depend>
   <depend>std_srvs</depend>
+  <depend>std_msgs</depend>
+  <depend>franka_msgs</depend>
   <depend>compliant_controllers_msgs</depend>
   <depend>ros2_control_robot_dynamics</depend>
+  <depend>urdf</depend>
   <depend>sensor_msgs</depend>
   <depend>eigen</depend>
   <depend>pinocchio</depend>

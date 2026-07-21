@@ -23,7 +23,7 @@ public:
                  int num_joints);
   void start();
   void stop();
-  void setMode(int mode) { mode_.store(mode, std::memory_order_relaxed); }
+  void setLogFilterTag(int tag) { log_filter_tag_.store(tag, std::memory_order_relaxed); }
 
   void record(double stamp_s,
               const Eigen::VectorXd& q,
@@ -37,12 +37,12 @@ public:
   bool enabled() const { return enabled_; }
   const std::string& outputPath() const { return output_path_; }
   double duration() const { return duration_s_; }
-  int mode() const { return mode_.load(std::memory_order_relaxed); }
+  int logFilterTag() const { return log_filter_tag_.load(std::memory_order_relaxed); }
 
 private:
   struct Sample {
     double stamp_s{0.0};
-    int mode{0};
+    int log_filter_tag{0};
     Eigen::VectorXd q;
     Eigen::VectorXd dq;
     Eigen::VectorXd tau_measured;
@@ -66,7 +66,7 @@ private:
   double start_stamp_s_{0.0};
   std::string output_path_;
   std::size_t max_queue_size_{4096};
-  std::atomic<int> mode_{0};
+  std::atomic<int> log_filter_tag_{0};
 
   mutable std::mutex mutex_;
   std::condition_variable condition_;

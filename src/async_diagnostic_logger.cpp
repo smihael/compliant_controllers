@@ -1,7 +1,5 @@
 #include <compliant_controllers/async_diagnostic_logger.hpp>
 
-#include <compliant_controllers/parameter_utils.hpp>
-
 #include <chrono>
 #include <ctime>
 #include <filesystem>
@@ -20,12 +18,12 @@ bool AsyncDiagnosticLogger::configure(const rclcpp_lifecycle::LifecycleNode::Sha
   stop();
   num_joints_ = num_joints;
   enabled_ = false;
-  duration_s_ = parameter_utils::get_optional_double(node, "diagnostic_logger.duration", 0.0);
-  const auto requested_path =
-    parameter_utils::get_optional_string(node, "diagnostic_logger.log_file", "");
-  mode_.store(static_cast<int>(
-                parameter_utils::get_optional_double(node, "diagnostic_logger.mode", 0.0)),
-              std::memory_order_relaxed);
+  node->get_parameter("diagnostic_logger.duration", duration_s_);
+  std::string requested_path;
+  node->get_parameter("diagnostic_logger.log_file", requested_path);
+  double log_filter_tag_value{0.0};
+  node->get_parameter("diagnostic_logger.log_filter_tag", log_filter_tag_value);
+  log_filter_tag_.store(static_cast<int>(log_filter_tag_value), std::memory_order_relaxed);
 
   if (requested_path.empty() || duration_s_ <= 0.0) {
     output_path_.clear();
@@ -35,8 +33,8 @@ bool AsyncDiagnosticLogger::configure(const rclcpp_lifecycle::LifecycleNode::Sha
   output_path_ = timestampedPath(requested_path);
   enabled_ = true;
   RCLCPP_INFO(node->get_logger(),
-              "Diagnostic logger configured: file='%s', duration=%.3fs, mode=%d",
-              output_path_.c_str(), duration_s_, mode());
+              "Diagnostic logger configured: file='%s', duration=%.3fs, log_filter_tag=%d",
+              output_path_.c_str(), duration_s_, logFilterTag());
   return true;
 }
 
@@ -99,7 +97,7 @@ void AsyncDiagnosticLogger::record(double stamp_s,
   }
   queue_.push_back(Sample{
     stamp_s,
-    mode(),
+    logFilterTag(),
     q,
     dq,
     tau_measured,
@@ -156,7 +154,7 @@ void AsyncDiagnosticLogger::writerLoop() {
 }
 
 void AsyncDiagnosticLogger::writeHeader(std::ofstream& out) const {
-  out << "stamp_s,mode";
+  out << "stamp_s,log_filter_tag";
   for (int i = 0; i < num_joints_; ++i) {
     out << ",q" << i;
   }
@@ -184,7 +182,7 @@ void AsyncDiagnosticLogger::writeHeader(std::ofstream& out) const {
 }
 
 void AsyncDiagnosticLogger::writeSample(std::ofstream& out, const Sample& sample) const {
-  out << std::setprecision(12) << sample.stamp_s << "," << sample.mode;
+  out << std::setprecision(12) << sample.stamp_s << "," << sample.log_filter_tag;
   for (int i = 0; i < num_joints_; ++i) {
     out << "," << sample.q(i);
   }

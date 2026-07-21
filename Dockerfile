@@ -171,7 +171,12 @@ RUN if ! getent group ${USER_GID} >/dev/null; then groupadd --gid ${USER_GID} ${
     echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USERNAME} && \
     chmod 0440 /etc/sudoers.d/${USERNAME} && \
     echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/${USERNAME}/.bashrc && \
+    echo "source /franka_ws/install/setup.bash" >> /home/${USERNAME}/.bashrc && \
+    echo "source /lbr_ws/install/setup.bash" >> /home/${USERNAME}/.bashrc && \
+    echo "source /controllers_ws/install/setup.bash" >> /home/${USERNAME}/.bashrc && \
     echo "source /usr/share/colcon_argcomplete/hook/colcon-argcomplete.bash" >> /home/${USERNAME}/.bashrc && \
-    chown -R ${USER_UID}:${USER_GID} /home/${USERNAME}
+    chown -R ${USER_UID}:${USER_GID} /home/${USERNAME} /controllers_ws
+
+WORKDIR /controllers_ws
 
 SHELL ["/bin/bash", "-c"]

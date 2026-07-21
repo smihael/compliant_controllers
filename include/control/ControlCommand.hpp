@@ -15,13 +15,23 @@ struct ControlCommand {
     Eigen::VectorXd k_ns;    
     Eigen::VectorXd d_ns;     
     Eigen::VectorXd tau_ff;  
+    Eigen::VectorXd joint_position;
+    Eigen::VectorXd joint_velocity;
+    Eigen::VectorXd joint_stiffness;
+    Eigen::VectorXd joint_damping;
+    Eigen::VectorXd joint_torque_ff;
 
     ControlCommand() = default;
     explicit ControlCommand(size_t n)
             : q_ns_des(Eigen::VectorXd::Zero(static_cast<long>(n))),
               k_ns(Eigen::VectorXd::Zero(static_cast<long>(n))),
               d_ns(Eigen::VectorXd::Zero(static_cast<long>(n))),
-              tau_ff(Eigen::VectorXd::Zero(static_cast<long>(n))) {}
+              tau_ff(Eigen::VectorXd::Zero(static_cast<long>(n))),
+              joint_position(Eigen::VectorXd::Zero(static_cast<long>(n))),
+              joint_velocity(Eigen::VectorXd::Zero(static_cast<long>(n))),
+              joint_stiffness(Eigen::VectorXd::Zero(static_cast<long>(n))),
+              joint_damping(Eigen::VectorXd::Zero(static_cast<long>(n))),
+              joint_torque_ff(Eigen::VectorXd::Zero(static_cast<long>(n))) {}
 };
 
 } // namespace control
