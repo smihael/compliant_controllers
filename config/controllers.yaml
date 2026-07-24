@@ -1,5 +1,0 @@
-cartesian_impedance_controller:
-  type: compliant_controllers/CartesianImpedanceController
-  arm_id: panda
-  k_p: 300.0
-  k_d: 15.0

@@ -1,0 +1,17 @@
+/controller_manager:
+  ros__parameters:
+    update_rate: 1000  # Hz
+    cartesian_impedance_controller:
+      type: compliant_controllers/CartesianImpedanceController
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+
+/cartesian_impedance_controller:
+  ros__parameters:
+    arm_id: fr3
+    k_p: 200.0
+    k_d: 10.0
+    robot_description_node: robot_state_publisher
+    robot_description_param: robot_description
