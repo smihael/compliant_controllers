@@ -164,3 +164,19 @@ ros2 run compliant_controllers test_cartesian_command.py \
 - `tf_prefix_delim` (string): Delimiter between prefix and frame name (`/` or `_`). Default: `/`
 - `dx`, `dy`, `dz` (double): Cartesian position offsets [m]. Default: `0.0, 0.0, 0.05`
 - `k_lin`, `k_rot` (double): Linear and rotational stiffness. Default: `300.0, 20.0`
+
+## Reference
+
+If you are using this package, consider citing:
+
+```bib
+@misc{simonic2026plugplaycomply,
+      title={Plug, Play, and Comply: A Modular Framework for Online Variable Impedance with Arbitrarily Oriented Compliance Axes}, 
+      author={Mihael Simoni\v{c} and Xiaocong Li},
+      year={2026},
+      eprint={2607.22483},
+      archivePrefix={arXiv},
+      url={https://arxiv.org/abs/2607.22483}, 
+}
+```
+
