@@ -35,6 +35,20 @@ JointImpedanceImpl::JointImpedanceImpl(int num_joints) : num_joints_(num_joints)
             << __TIME__ << "\033[0m" << std::endl;
 }
 
+void JointImpedanceImpl::setParameter(
+    const std::string& name,
+    const ParameterValue& value) {
+  const auto* number = std::get_if<double>(&value);
+  if (number == nullptr) {
+    return;
+  }
+  if (name == "joint_impedance.filter_alpha") {
+    filter_alpha_ = *number;
+  } else if (name == "joint_impedance.max_tau_delta") {
+    max_tau_delta_ = *number;
+  }
+}
+
 bool JointImpedanceImpl::validInput(const ControlCommand& command,
                                     const control::ControllerState& current_state,
                                     const Eigen::Ref<const Eigen::VectorXd>& control_output) const {

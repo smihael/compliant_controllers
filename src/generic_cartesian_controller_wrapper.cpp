@@ -26,6 +26,22 @@ CallbackReturn GenericCartesianControllerWrapper::on_init() {
 
   logger_ = get_node()->get_logger();
   configureLogging("GenericCartesianControllerWrapper");
+  auto_declare<bool>("gravity_compensation_enabled", false);
+  auto_declare<bool>("dithering_enabled", false);
+  auto_declare<bool>("friction_compensation_enabled", false);
+  auto_declare<std::string>("friction_compensation.model", "");
+  auto_declare<double>("friction_compensation.scale", 1.0);
+  auto_declare<std::vector<double>>("friction_compensation.phi1", {});
+  auto_declare<std::vector<double>>("friction_compensation.phi2", {});
+  auto_declare<std::vector<double>>("friction_compensation.phi3", {});
+  auto_declare<std::vector<double>>("friction_compensation.hyst", {});
+  auto_declare<std::vector<double>>("friction_compensation.fvp", {});
+  auto_declare<std::vector<double>>("friction_compensation.fcp", {});
+  auto_declare<std::vector<double>>("friction_compensation.fvn", {});
+  auto_declare<std::vector<double>>("friction_compensation.fcn", {});
+  auto_declare<std::string>("log_file", "");
+  auto_declare<std::string>("plugin_params_file", "");
+  auto_declare<bool>("max_step_guard_enabled", max_step_guard_enabled_);
   auto_declare<double>("max_position_command_step_m", max_position_command_step_m_);
   auto_declare<double>("max_orientation_command_step_rad", max_orientation_command_step_rad_);
 
@@ -66,6 +82,7 @@ CallbackReturn GenericCartesianControllerWrapper::on_configure(const rclcpp_life
   get_node()->get_parameter("init_k_ori", init_k_ori_);
   get_node()->get_parameter("gravity_compensation_enabled", robot_gravity_compensation_enabled_);
   get_node()->get_parameter("dithering_enabled", dithering_enabled_);
+  get_node()->get_parameter("max_step_guard_enabled", max_step_guard_enabled_);
   get_node()->get_parameter("max_position_command_step_m", max_position_command_step_m_);
   get_node()->get_parameter("max_orientation_command_step_rad", max_orientation_command_step_rad_);
 
@@ -104,6 +121,16 @@ CallbackReturn GenericCartesianControllerWrapper::on_configure(const rclcpp_life
   }
   if (impl_) {
     impl_->setRobotModel(static_cast<void*>(&robot_model_));
+    std::string plugin_params_file;
+    std::string log_file;
+    get_node()->get_parameter("plugin_params_file", plugin_params_file);
+    get_node()->get_parameter("log_file", log_file);
+    if (!plugin_params_file.empty()) {
+      impl_->setParameter("plugin_params_file", plugin_params_file);
+    }
+    if (!log_file.empty()) {
+      impl_->setParameter("log_file", log_file);
+    }
   }
   RCLCPP_INFO(logger_, "Instantiated control implementation library (initialization deferred): %s", impl_library_.c_str());
   logConfigurationSummary();
@@ -134,9 +161,8 @@ void GenericCartesianControllerWrapper::logConfigurationSummary() {
               CartesianErrorBiasedDither::kBeta);
   if (diagnostic_logger_.enabled()) {
     RCLCPP_INFO(logger_,
-                "Diagnostic logging: enabled file='%s', duration=%.3fs, log_filter_tag=%d",
+                "Diagnostic logging: enabled file='%s', log_filter_tag=%d",
                 diagnostic_logger_.outputPath().c_str(),
-                diagnostic_logger_.duration(),
                 diagnostic_logger_.logFilterTag());
   }
 }
@@ -274,7 +300,8 @@ void GenericCartesianControllerWrapper::cartesian_command_callback(const complia
   const double orientation_dot = std::clamp(
       std::abs(cmd.orientation.dot(state_buffer_.orientation.normalized())), 0.0, 1.0);
   const double orientation_step = 2.0 * std::acos(orientation_dot);
-  if (!std::isfinite(position_step) || position_step > max_position_command_step_m_) {
+  if (!std::isfinite(position_step) ||
+      (max_step_guard_enabled_ && position_step > max_position_command_step_m_)) {
     RCLCPP_WARN_THROTTLE(
         logger_, *get_node()->get_clock(), 1000,
         "CartesianCommand translation jump is %.3f mm (limit %.3f mm); "
@@ -283,7 +310,8 @@ void GenericCartesianControllerWrapper::cartesian_command_callback(const complia
     cmd.position = state_buffer_.position;
   }
   if (!std::isfinite(orientation_step) ||
-      orientation_step > max_orientation_command_step_rad_) {
+      (max_step_guard_enabled_ &&
+       orientation_step > max_orientation_command_step_rad_)) {
     RCLCPP_WARN_THROTTLE(
         logger_, *get_node()->get_clock(), 1000,
         "CartesianCommand orientation jump is %.3f deg (limit %.3f deg); "

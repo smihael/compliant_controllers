@@ -20,6 +20,8 @@ public:
             double dt) override;
 
   void setRobotModel(void* model_ptr) override { robot_model_ = static_cast<RobotModel*>(model_ptr); }
+  void setParameter(const std::string& name,
+                    const ParameterValue& value) override;
 
 private:
   bool validInput(const control::ControlCommand& command,

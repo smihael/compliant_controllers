@@ -29,6 +29,17 @@ CallbackReturn GenericJointControllerWrapper::on_init() {
 
   logger_ = get_node()->get_logger();
   configureLogging("GenericJointControllerWrapper");
+  auto_declare<bool>("friction_compensation_enabled", false);
+  auto_declare<std::string>("friction_compensation.model", "");
+  auto_declare<double>("friction_compensation.scale", 1.0);
+  auto_declare<std::vector<double>>("friction_compensation.phi1", {});
+  auto_declare<std::vector<double>>("friction_compensation.phi2", {});
+  auto_declare<std::vector<double>>("friction_compensation.phi3", {});
+  auto_declare<std::vector<double>>("friction_compensation.hyst", {});
+  auto_declare<std::vector<double>>("friction_compensation.fvp", {});
+  auto_declare<std::vector<double>>("friction_compensation.fcp", {});
+  auto_declare<std::vector<double>>("friction_compensation.fvn", {});
+  auto_declare<std::vector<double>>("friction_compensation.fcn", {});
   return CallbackReturn::SUCCESS;
 }
 
@@ -51,10 +62,25 @@ CallbackReturn GenericJointControllerWrapper::on_configure(const rclcpp_lifecycl
   get_node()->get_parameter("joint_impedance.initial_damping", damping_fallback);
   init_stiffness_ = vector_or_constant(initial_stiffness, num_joints_, stiffness_fallback);
   init_damping_ = vector_or_constant(initial_damping, num_joints_, damping_fallback);
+  double filter_alpha{0.99};
+  double max_tau_delta{1.0};
+  get_node()->get_parameter("joint_impedance.filter_alpha", filter_alpha);
+  get_node()->get_parameter("joint_impedance.max_tau_delta", max_tau_delta);
+  if (!std::isfinite(filter_alpha) || filter_alpha < 0.0 || filter_alpha > 1.0) {
+    RCLCPP_ERROR(logger_, "joint_impedance.filter_alpha must be finite and in [0, 1].");
+    return CallbackReturn::ERROR;
+  }
+  if (!std::isfinite(max_tau_delta) || max_tau_delta <= 0.0) {
+    RCLCPP_ERROR(logger_, "joint_impedance.max_tau_delta must be finite and positive.");
+    return CallbackReturn::ERROR;
+  }
 
   add_friction_compensation_ = false;
   get_node()->get_parameter("friction_compensation_enabled", add_friction_compensation_);
-  friction_compensation_.configure(get_node(), num_joints_, true);
+  if (!friction_compensation_.configure(get_node(), num_joints_, true)) {
+    RCLCPP_ERROR(logger_, "Failed to configure friction compensation.");
+    return CallbackReturn::ERROR;
+  }
 
   impl_library_ = get_node()->get_parameter("impl_library").as_string();
 
@@ -77,6 +103,8 @@ CallbackReturn GenericJointControllerWrapper::on_configure(const rclcpp_lifecycl
     RCLCPP_ERROR(get_node()->get_logger(), "Failed to instantiate joint implementation: %s", load_err.c_str());
     return CallbackReturn::ERROR;
   }
+  impl_->setParameter("joint_impedance.filter_alpha", filter_alpha);
+  impl_->setParameter("joint_impedance.max_tau_delta", max_tau_delta);
   logConfigurationSummary();
   return CallbackReturn::SUCCESS;
 }
@@ -171,7 +199,12 @@ controller_interface::return_type GenericJointControllerWrapper::update(
     return controller_interface::return_type::ERROR;
   }
   if (add_friction_compensation_) {
-    friction_compensation_.add(state_buffer_.q, state_buffer_.dq, period.seconds(), tau_out_);
+    if (!friction_compensation_.add(
+          state_buffer_.q, state_buffer_.dq, period.seconds(), tau_out_)) {
+      RCLCPP_ERROR(logger_, "Friction compensation failed; writing zero torque.");
+      writeZeroTorques();
+      return controller_interface::return_type::ERROR;
+    }
   }
   if (!joint_limit_repulsion_.addTorque(state_buffer_.q, state_buffer_.dq, tau_out_)) {
     RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,

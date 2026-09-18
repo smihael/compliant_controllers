@@ -18,14 +18,13 @@ bool AsyncDiagnosticLogger::configure(const rclcpp_lifecycle::LifecycleNode::Sha
   stop();
   num_joints_ = num_joints;
   enabled_ = false;
-  node->get_parameter("diagnostic_logger.duration", duration_s_);
   std::string requested_path;
-  node->get_parameter("diagnostic_logger.log_file", requested_path);
+  node->get_parameter("log_file", requested_path);
   double log_filter_tag_value{0.0};
   node->get_parameter("diagnostic_logger.log_filter_tag", log_filter_tag_value);
   log_filter_tag_.store(static_cast<int>(log_filter_tag_value), std::memory_order_relaxed);
 
-  if (requested_path.empty() || duration_s_ <= 0.0) {
+  if (requested_path.empty()) {
     output_path_.clear();
     return true;
   }
@@ -33,8 +32,8 @@ bool AsyncDiagnosticLogger::configure(const rclcpp_lifecycle::LifecycleNode::Sha
   output_path_ = timestampedPath(requested_path);
   enabled_ = true;
   RCLCPP_INFO(node->get_logger(),
-              "Diagnostic logger configured: file='%s', duration=%.3fs, log_filter_tag=%d",
-              output_path_.c_str(), duration_s_, logFilterTag());
+              "Diagnostic logger configured: file='%s', log_filter_tag=%d",
+              output_path_.c_str(), logFilterTag());
   return true;
 }
 
@@ -47,7 +46,6 @@ void AsyncDiagnosticLogger::start() {
     std::lock_guard<std::mutex> lock(mutex_);
     queue_.clear();
     stop_requested_ = false;
-    start_stamp_s_ = 0.0;
   }
   running_ = true;
   writer_thread_ = std::thread(&AsyncDiagnosticLogger::writerLoop, this);
@@ -84,14 +82,6 @@ void AsyncDiagnosticLogger::record(double stamp_s,
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  if (start_stamp_s_ <= 0.0) {
-    start_stamp_s_ = stamp_s;
-  }
-  if (stamp_s - start_stamp_s_ > duration_s_) {
-    stop_requested_ = true;
-    condition_.notify_one();
-    return;
-  }
   if (queue_.size() >= max_queue_size_) {
     queue_.pop_front();
   }

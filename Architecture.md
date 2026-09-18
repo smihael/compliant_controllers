@@ -1,7 +1,5 @@
 # Architecture
 
-## Executive Summary
-
 `compliant_controllers` provides ROS 2 `ros2_control` controller plugins that wrap dynamically loaded, ROS-independent controller implementations. It provides two exported wrapper plugins:
 
 - `GenericCartesianControllerWrapper`
@@ -137,18 +135,6 @@ The implementation writes joint torque commands into the provided output vector.
 ### `JointImpedanceImpl`
 
 `JointImpedanceImpl` is a ROS-independent joint-space impedance implementation. It supports filtered joint targets, stiffness/damping parameters, torque-rate saturation, and a power-enable guard before producing full commanded torques.
- 
-### `FrictionCompensation`
-
-`FrictionCompensation` is a reusable torque-domain compensation module.
-
-### Gravity Compensation
-
-Gravity compensation is currently a small Cartesian-wrapper-owned state block.
-
-### End-Effector Load Compensation
-
-End-effector load compensation is currently Cartesian-wrapper-owned, but will be extracted. The current implementation uses the robot model Jacobian and current end-effector orientation.
 
 ### `AsyncDiagnosticLogger`
 
@@ -163,21 +149,6 @@ It accepts:
 - diagnostic log filter tag
 
 Samples are queued from the wrapper and written by a background thread. This keeps normal update-time work bounded while still allowing short diagnostic captures.
-
-### `parameter_utils`
-
-`parameter_utils` centralizes optional ROS parameter access.
-
-Current helpers:
-
-```cpp
-get_optional_bool(...)
-get_optional_double(...)
-get_optional_double_array(...)
-get_optional_string(...)
-```
-
-The utility keeps optional-parameter behavior consistent and removes duplicated try/catch parameter reads from modules.
 
 ## Lifecycle Flow
 
@@ -250,6 +221,15 @@ writeTorqueOutput()
 logFirstUpdateSummary()
 ```
 
+### Realtime Considerations
+
+The intended realtime policy is:
+- No ROS parameter reads in `update()`.
+- No dynamic model selection in `update()`.
+- Compensation vectors are validated and allocated during configuration.
+- File writes are delegated to `AsyncDiagnosticLogger` instead of being performed directly in the control loop.
+- `update()` only reads hardware state, runs model/controller math, adds preconfigured compensation, and writes torques.
+
 ## Package Boundaries
 
 The core package contains:
@@ -261,26 +241,7 @@ The core package contains:
 - generic wrapper launch includes
 - test/helper scripts that directly exercise this package
 
-The demos package contains:
-
-- robot-specific launch files
-- robot-specific controller YAML files
-- Robotiq, SpaceMouse, and platform-specific demo wiring
-- demo workspace manifests for source-only dependencies
-
-This boundary matters for Docker and CI. The core package should remain buildable with only its direct shared dependencies. Demo dependencies should be imported by the demos workspace manifest, not by the core package manifest.
-
-## Realtime Considerations
-
-The intended realtime policy is:
-
-- No ROS parameter reads in `update()`.
-- No dynamic model selection in `update()`.
-- Compensation vectors are validated and allocated during configuration.
-- File writes are delegated to `AsyncDiagnosticLogger` instead of being performed directly in the control loop.
-- `update()` only reads hardware state, runs model/controller math, adds preconfigured compensation, and writes torques.
-
-Some remaining operations, such as throttled ROS logging on error paths, are not hard realtime-safe when they fire. They are acceptable for diagnostic fault paths in many `ros2_control` deployments, but a strict realtime deployment should replace them with non-RT status reporting.
+The demos package contains platform-specific launch and configuration files.
 
 ## Timing Tests
 
@@ -289,5 +250,4 @@ The optional `COMPLIANT_CONTROLLERS_BUILD_TIMING_TESTS` CMake option builds stan
 - `joint_update_timing_test`
 - `cartesian_update_timing_test`
 
-These tests measure implementation and model-update timing without ros2_control hardware or libfranka communication. They are useful for validating whether the control math has enough headroom for a 1 kHz loop.
-
+These tests measure implementation and model-update timing without communication. They can be used to assess whether the update step provides sufficient computational headroom for the desired control-loop frequency.

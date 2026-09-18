@@ -34,6 +34,7 @@ public:
 private:
   double init_k_pos_{};
   double init_k_ori_{};
+  bool max_step_guard_enabled_{true};
   double max_position_command_step_m_{0.01};
   double max_orientation_command_step_rad_{1.0 * std::numbers::pi / 180.0};
 

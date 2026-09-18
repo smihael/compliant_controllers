@@ -36,7 +36,6 @@ public:
 
   bool enabled() const { return enabled_; }
   const std::string& outputPath() const { return output_path_; }
-  double duration() const { return duration_s_; }
   int logFilterTag() const { return log_filter_tag_.load(std::memory_order_relaxed); }
 
 private:
@@ -62,8 +61,6 @@ private:
   bool running_{false};
   bool stop_requested_{false};
   int num_joints_{0};
-  double duration_s_{0.0};
-  double start_stamp_s_{0.0};
   std::string output_path_;
   std::size_t max_queue_size_{4096};
   std::atomic<int> log_filter_tag_{0};

@@ -14,7 +14,7 @@ option(COMPLIANT_CONTROLLERS_BUILD_TIMING_TESTS "Build standalone controller tim
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic -Wno-return-type)
-  add_compile_options(-O3 -DNDEBUG -march=native)
+  add_compile_options(-O3 -DNDEBUG)
   add_compile_options(-Wno-maybe-uninitialized -Wno-uninitialized)
 endif()
 

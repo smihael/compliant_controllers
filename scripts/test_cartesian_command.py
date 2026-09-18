@@ -127,6 +127,7 @@ class TestCartesianCommand(Node):
 
         cmd = CartesianCommand()
         cmd.header.stamp = self.get_clock().now().to_msg()
+        cmd.header.frame_id = ee
         # Current pose target with offsets
         cmd.pose.position.x = tf.transform.translation.x + dx
         cmd.pose.position.y = tf.transform.translation.y + dy
@@ -159,11 +160,13 @@ def main(argv=None):
     rclpy.init(args=argv)
     node = TestCartesianCommand()
     try:
-        rclpy.spin(node)
+        while rclpy.ok() and not node.sent:
+            rclpy.spin_once(node, timeout_sec=0.1)
     except KeyboardInterrupt:
         pass
     node.destroy_node()
-    rclpy.shutdown()
+    if rclpy.ok():
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

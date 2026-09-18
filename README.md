@@ -1,169 +1,87 @@
-## compliant_controllers
+# compliant_controllers
 
-Robot-agnostic compliant controllers for ROS 2 using ros2_control.
+Robot-agnostic compliant controllers for ROS 2 using `ros2_control`.
 
-## Architecture & features
-- ROS-free core abstract classes:
-	- `RobotModel`: defines interface for computing J(q), C(q, dq), M(q) and g(q)
-	- `ControlCommand`, `ControlStates`: lightweight data containers for commands and feedback.
-	- `AbstractController`: defines interface for computing joint torques based on the above data containers.
-- Sample robot model implementation based on the Pinocchio library that reads the URDF from ROS parameters
-- Sample controller implementation: `CartesianImpedanceController : AbstractController` builds as a plain shared library (.so) without ROS deps
-- ROS 2 wrapper: `GenericCartesianControllerWrapper` is a ros2_control plugin that instantiates the chosen `AbstractController`, streams states in real time, calls a `RobotModel` implementation and the controller’s `step(...)`, and writes torques.
-- Friction estimation implementation: `FrictionEstimationImpl` (loaded via `impl_library`) performs per-joint sinusoidal excitation and logs measurement data to CSV.
+## Architecture
 
-Thus, the controller logic is fully separated from ROS and the robot. This keeps controller code simple and readable (no ROS 2 boilerplate). Controller implementations can be written in C++ or e.g., Simulink. See https://github.com/smihael/compliant_controllers_simulink_pipeline
+The architecture separates robot dynamics, control data, the control law, and
+ROS 2 integration:
 
-## Build and Source
+- `RobotModel`, provided by `ros2_control_robot_dynamics`, computes end-effector
+  kinematics, the Jacobian `J(q)`, mass matrix `M(q)`, Coriolis/centrifugal torques,
+  and gravity torques `g(q)` from the robot description and joint state.
+- `ControlCommand` carries desired Cartesian or joint targets, stiffness,
+  damping, and feedforward inputs in a ROS-independent data structure.
+- `ControllerState`, defined in `ControlStates.hpp`, carries current joint
+  positions, velocities, measured torques, and end-effector pose.
+- `control::AbstractController` defines
+  `step(command, current_state, control_output, dt)`: one control-law evaluation
+  that writes the output joint torques. Implementations can access the externally
+  owned robot model through `setRobotModel(...)` and build as plain shared libraries.
+- `GenericCartesianControllerWrapper` and `GenericJointControllerWrapper` are
+  the `ros2_control` plugins. They handle lifecycle and ROS communication, read
+  hardware state, update the model and control data, call `step(...)`, and apply
+  compensation and torque limits before writing effort commands to the hardware.
+  Select the implementation library with `impl_library`.
 
-Build from the workspace root:
+The package includes reference Cartesian and joint impedance implementations.
+Robot description loading and Pinocchio-backed dynamics are provided by
+`ros2_control_robot_dynamics`. 
+
+This separation keeps controller logic independent of ROS 2 and robot-specific bringup, and supports implementations written in C++ or generated through the [Simulink pipeline](https://github.com/smihael/compliant_controllers_simulink_pipeline).
+
+See [Architecture.md](Architecture.md) for more details.
+
+## Build
+
+Place this repository, `compliant_controllers_msgs`, and
+`ros2_control_robot_dynamics` in your ROS 2 workspace and install their dependencies.
+From the workspace root, source your ROS distribution and build the package with
+its workspace dependencies:
 
 ```bash
-cd ~/local_ws
+source /opt/ros/<distro>/setup.bash
+colcon build --packages-up-to compliant_controllers --symlink-install \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 source install/setup.bash
-colcon build --packages-select compliant_controllers --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF --symlink-install
-source install/setup.bash
 ```
 
-You can also build using:
+For the shared Docker setup, run this from the parent workspace containing its
+`Dockerfile`:
+
 ```bash
-docker build \
-  --ssh default=$SSH_AUTH_SOCK \
-  --network=host \
-  -t compliant-controllers:$(date +"%Y%m%d_%H%M") \
-  .
-docker tag compliant-controllers:$(date +"%Y%m%d_%H%M") compliant-controllers:latest 
+docker build -t compliant-controllers:base .
 ```
 
-The Docker image builds the dependency workspaces first (`franka_ws`, `lbr_ws`, and `controllers_ws`) and sources their install spaces in interactive shells.
-For local overlay work with the current checkout mounted into the container:
+## Robot demos
+
+Robot-specific launch files, controller configurations, Docker Compose services,
+and Gazebo/MuJoCo setup live in
+[compliant_controllers_demos](https://github.com/smihael/compliant_controllers_demos).
+Follow the relevant demo README for hardware or simulator startup. With a controller manager running, inspect its controllers and hardware interfaces. Replace `/controller_manager` with the namespaced path when applicable:
 
 ```bash
-USER_UID=$(id -u) USER_GID=$(id -g) docker compose run --rm controllers
-# Inside the container:
-colcon build --packages-select compliant_controllers --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF --symlink-install
-source install/setup.bash
+ros2 control list_controllers --controller-manager /controller_manager
+ros2 control list_hardware_interfaces --controller-manager /controller_manager
 ```
 
-For desktop/GPU testing with [rocker](https://github.com/osrf/rocker):
-```bash
-rocker --devices /dev/dri --x11 --pulse --user --network=host --home \
-  --image-name compliant-controllers-rocker \
-  compliant-controllers:rr-dev
-```
+## Cartesian command example
 
-This builds a minimal overlay with host window-manager access, home-directory
-mounting, and GPU/audio/input forwarding. You can enter the running container
-with:
+`test_cartesian_command.py` sends a Cartesian offset from the current end-effector
+pose. Run it with the same ROS domain as the controller and matching namespace and
+frames. For the Franka Gazebo demo, this command requests a 5 mm X offset:
 
 ```bash
-docker exec -it compliant-controllers-rocker bash
-```
-
-Rocker is useful for visualization and simulation, but the plain command above
-does not grant all permissions required by some platforms. This includes `SYS_NICE`, realtime ulimits, host networking, host IPC, and `/dev` access.
-
-## gz_ros2_control adjustments 
-
-Upstream gazebo configurations for lbr stack and UR stack exclude effort (torque) command interfaces due to limitations in `gz_ros2_control` (see [ros-controls/gz_ros2_control#182](https://github.com/ros-controls/gz_ros2_control/issues/182)) and https://github.com/ros-controls/gz_ros2_control/issues/343. Franka does this already in their upstream configuration by exposing gazebo_effort flag.
-
-This means controllers that require **both position and effort command interfaces** cannot be used in Gazebo simulation. However, it works when just one interface per joint is used.
-
-- LBR (IIWA/MED) Gazebo: Workaround for gz_ros2_control not exposing effort in upstream launch. Generates URDF with `mode:=mock`, swaps `mock_components/GenericSystem` for `gz_ros2_control/GazeboSimSystem`, and injects plugin config.
-- UR Gazebo: Adds `<command_interface name="effort"/>` to all six joints at runtime and rewrites `ign_ros2_control/IgnitionSystem` to `gz_ros2_control/GazeboSimSystem`.
-
-## Launch Recipes
-
-- FR3 (real robot):
-
-```bash
-ros2 launch compliant_controllers_demos fr3.launch.py
-```
-
-- FR3 in Gazebo (ros_gz_sim): defaults `show_gazebo_gui:=false`, `show_rviz:=true`.
-
-```bash
-ros2 launch compliant_controllers_demos fr3_gz.launch.py \
-  controller_name:=cartesian_impedance_controller \
-  show_gazebo_gui:=true \
-  publish_world_to_base:=true
-```
-
-- UR (upstream ur_description, version 2.9.0, Gazebo Sim): adds `<command_interface name="effort"/>` to all six joints and rewrites `ign_ros2_control/IgnitionSystem` to `gz_ros2_control/GazeboSimSystem`. Defaults: `ur_type:=ur5e`, `controllers_file:=ur_gz_controllers.yaml`, `initial_joint_controller:=cartesian_impedance_controller`, `launch_rviz:=true`, `gazebo_gui:=true`.
-
-```bash
-ros2 launch compliant_controllers_demos ur_gz.launch.py ur_type:=ur10e
-
-# Headless and alternate controller examples
-ros2 launch compliant_controllers_demos ur_gz.launch.py ur_type:=ur10e launch_rviz:=false gazebo_gui:=false
-ros2 launch compliant_controllers_demos ur_gz.launch.py ur_type:=ur10e initial_joint_controller:=joint_trajectory_controller
-```
-
-- LBR (IIWA/MED) in Gazebo with effort command interfaces: generates URDF with `mode:=mock`, swaps `mock_components/GenericSystem` for `gz_ros2_control/GazeboSimSystem`, and injects plugin config. Defaults: `model:=iiwa14`, `ctrl:=cartesian_impedance_controller`, controller config `config/lbr_gz_controllers.yaml`.
-
-```bash
-ros2 launch compliant_controllers_demos lbr_gazebo.launch.py model:=iiwa7 ctrl:=cartesian_impedance_controller
-ros2 launch compliant_controllers_demos lbr_gazebo.launch.py model:=med14 ctrl:=lbr_torque_command_controller log_level:=debug
-```
-
-### Verify Controllers and Interfaces
-
-```bash
-ros2 control list_hardware_interfaces --controller-manager /ns/controller_manager
-ros2 control list_controllers --controller-manager /ns/controller_manager
-```
-
-### Testing Cartesian Commands
-
-A flexible test script is provided that supports namespace and frame naming:
-
-**Basic usage (auto-discovers frames from the controller):**
-```bash
-ros2 run compliant_controllers test_cartesian_command.py
-```
-
-**Explicit examples:**
-
-- UR (Gazebo):
-
-```bash
+export ROS_DOMAIN_ID=1
 ros2 run compliant_controllers test_cartesian_command.py \
-  --ros-args -r __ns:=/ur \
+  --ros-args -r __ns:=/ \
   -p controller_name:=cartesian_impedance_controller \
-  -p base_frame:=base_link -p ee_frame:=tool0 \
-  -p dz:=-0.02
+  -p base_frame:=fr3_link0 -p ee_frame:=fr3_link8 \
+  -p dx:=0.005 -p dy:=0.0 -p dz:=0.0 \
+  -p k_lin:=300.0 -p k_rot:=20.0 \
 ```
 
-- FR3 (Gazebo):
 
-```bash
-ros2 run compliant_controllers test_cartesian_command.py \
-  --ros-args -r __ns:=/fr3 \
-  -p controller_name:=cartesian_impedance_controller \
-  -p base_frame:=panda_link0 -p ee_frame:=panda_link8 \
-  -p dz:=-0.05
-```
-
-- LBR (Gazebo):
-
-```bash
-ros2 run compliant_controllers test_cartesian_command.py \
-  --ros-args -r __ns:=/iiwa14 \
-  -p controller_name:=cartesian_impedance_controller \
-  -p base_frame:=iiwa14_link_0 -p ee_frame:=iiwa14_link_ee \
-  -p dz:=-0.05
-```
-
-**Test script parameters:**
-- `robot_name` (string): Robot name for default frame generation. Default: `lbr`
-- `robot_ns` (string): Alternative namespace specification (prefer using `--ros-args -r __ns:=...`)
-- `controller_name` (string): Controller name to query ee_frame from. Default: `cartesian_impedance_controller`
-- `base_frame` (string): Base frame for TF lookup. Default: `<robot_name>_link_0`
-- `ee_frame` (string): End-effector frame. Auto-discovered from controller if not set, or defaults to `<robot_name>_link_ee`
-- `tf_prefix` (string): Prefix to prepend to frame names (e.g., for namespaced TFs). Default: empty
-- `tf_prefix_delim` (string): Delimiter between prefix and frame name (`/` or `_`). Default: `/`
-- `dx`, `dy`, `dz` (double): Cartesian position offsets [m]. Default: `0.0, 0.0, 0.05`
-- `k_lin`, `k_rot` (double): Linear and rotational stiffness. Default: `300.0, 20.0`
 
 ## Reference
 
@@ -171,12 +89,12 @@ If you are using this package, consider citing:
 
 ```bib
 @misc{simonic2026plugplaycomply,
-      title={Plug, Play, and Comply: A Modular Framework for Online Variable Impedance with Arbitrarily Oriented Compliance Axes}, 
+      title={Plug, Play, and Comply: A Modular Framework for Online Variable Impedance with Arbitrarily Oriented Compliance Axes},
       author={Mihael Simoni\v{c} and Xiaocong Li},
       year={2026},
       eprint={2607.22483},
       archivePrefix={arXiv},
-      url={https://arxiv.org/abs/2607.22483}, 
+      url={https://arxiv.org/abs/2607.22483},
 }
 ```
 

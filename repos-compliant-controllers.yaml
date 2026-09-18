@@ -2,7 +2,7 @@ repositories:
   compliant_controllers:
     type: git
     url: https://github.com/smihael/compliant_controllers.git
-    version: master
+    version: humble
 
   compliant_controllers_msgs:
     type: git
