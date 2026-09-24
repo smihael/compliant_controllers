@@ -9,6 +9,27 @@
 namespace compliant_controllers {
 
 namespace {
+bool validStepInput(const control::ControlCommand& command,
+                    const control::ControllerState& current_state,
+                    const Eigen::VectorXd& control_output,
+                    int num_joints) {
+  return control_output.size() == num_joints &&
+         current_state.q.size() == num_joints &&
+         current_state.dq.size() == num_joints &&
+         command.joint_position.size() == num_joints &&
+         command.joint_velocity.size() == num_joints &&
+         command.joint_stiffness.size() == num_joints &&
+         command.joint_damping.size() == num_joints &&
+         command.joint_torque_ff.size() == num_joints &&
+         current_state.q.allFinite() &&
+         current_state.dq.allFinite() &&
+         command.joint_position.allFinite() &&
+         command.joint_velocity.allFinite() &&
+         command.joint_stiffness.allFinite() &&
+         command.joint_damping.allFinite() &&
+         command.joint_torque_ff.allFinite();
+}
+
 Eigen::VectorXd vector_or_constant(const std::vector<double>& values, int size, double fallback) {
   Eigen::VectorXd out(size);
   if (values.size() == static_cast<size_t>(size)) {
@@ -112,7 +133,6 @@ CallbackReturn GenericJointControllerWrapper::on_configure(const rclcpp_lifecycl
 CallbackReturn GenericJointControllerWrapper::on_activate(const rclcpp_lifecycle::State&) {
   state_buffer_ = control::ControllerState(num_joints_);
   readControllerState(state_buffer_);
-  robot_model_.update(state_buffer_.q);
   active_since_ = get_node()->get_clock()->now();
   first_update_logged_ = false;
 
@@ -126,6 +146,16 @@ CallbackReturn GenericJointControllerWrapper::on_activate(const rclcpp_lifecycle
 
   tau_out_.setZero(num_joints_);
   constexpr double controller_period = 0.001;
+  if (!validStepInput(init_cmd, state_buffer_, tau_out_, num_joints_)) {
+    RCLCPP_ERROR(logger_, "Invalid state/command input or output size; refusing activation.");
+    writeZeroTorques();
+    return CallbackReturn::ERROR;
+  }
+  if (!robot_model_.update(state_buffer_.q)) {
+    RCLCPP_ERROR(logger_, "RobotModel update failed; refusing activation.");
+    writeZeroTorques();
+    return CallbackReturn::ERROR;
+  }
   const bool init_step_ok = impl_ && impl_->step(init_cmd, state_buffer_, tau_out_, controller_period);
   if (!init_step_ok) {
     RCLCPP_ERROR(get_node()->get_logger(),
@@ -184,14 +214,20 @@ void GenericJointControllerWrapper::joint_command_callback(
 controller_interface::return_type GenericJointControllerWrapper::update(
   const rclcpp::Time&, const rclcpp::Duration& period) {
   readControllerState(state_buffer_);
+  const auto* latest_cmd = rt_joint_cmd_buffer_.readFromRT();
+  if (!latest_cmd || !validStepInput(*latest_cmd, state_buffer_, tau_out_, num_joints_)) {
+    RCLCPP_ERROR(logger_,
+                 "Invalid state/command input or output size; writing zero torque and returning ERROR.");
+    writeZeroTorques();
+    return controller_interface::return_type::ERROR;
+  }
   if (!robot_model_.update(state_buffer_.q)) {
     RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
                           "RobotModel update failed; writing zero torque.");
     writeZeroTorques();
     return controller_interface::return_type::OK;
   }
-  const auto* latest_cmd = rt_joint_cmd_buffer_.readFromRT();
-  if (!(impl_ && latest_cmd && impl_->step(*latest_cmd, state_buffer_, tau_out_, period.seconds()))) {
+  if (!(impl_ && impl_->step(*latest_cmd, state_buffer_, tau_out_, period.seconds()))) {
     RCLCPP_ERROR(get_node()->get_logger(),
                  "Joint impl '%s' reported step() failure.",
                  name_fn_ ? name_fn_() : "<unknown>");

@@ -24,10 +24,9 @@ struct Options {
 
 void usage(const char* argv0) {
   std::cerr
-    << "Usage: " << argv0 << " [--urdf-xml FILE] [--iterations N] [--warmup N] [--joints N]\n"
+    << "Usage: " << argv0 << " --urdf-xml FILE [--iterations N] [--warmup N] [--joints N]\n"
     << "\n"
-    << "Measures model update + JointImpedanceImpl::step() without ros2_control/libfranka communication.\n"
-    << "If --urdf-xml is omitted, the implementation runs without RobotModel coriolis.\n";
+    << "Measures model update + JointImpedanceImpl::step() without ros2_control/libfranka communication.\n";
 }
 
 Options parse_options(int argc, char** argv) {
@@ -60,8 +59,8 @@ Options parse_options(int argc, char** argv) {
       std::exit(2);
     }
   }
-  if (options.iterations <= 0 || options.warmup < 0 || options.joints <= 0) {
-    std::cerr << "Invalid non-positive iteration/joint count.\n";
+  if (options.urdf_xml_path.empty() || options.iterations <= 0 || options.warmup < 0 || options.joints <= 0) {
+    std::cerr << "A URDF and valid iteration/joint counts are required.\n";
     usage(argv[0]);
     std::exit(2);
   }
@@ -134,18 +133,13 @@ int main(int argc, char** argv) {
 
   compliant_controllers::JointImpedanceImpl impl(options.joints);
   compliant_controllers::RobotModel robot_model;
-  bool model_enabled = false;
-
-  if (!options.urdf_xml_path.empty()) {
-    const auto urdf_xml = read_file(options.urdf_xml_path);
-    const auto joint_names = franka_joint_names("fr3", options.joints);
-    if (!robot_model.init(urdf_xml, "fr3_link8", joint_names)) {
-      std::cerr << "Failed to initialize RobotModel from " << options.urdf_xml_path << "\n";
-      return 1;
-    }
-    impl.setRobotModel(static_cast<void*>(&robot_model));
-    model_enabled = true;
+  const auto urdf_xml = read_file(options.urdf_xml_path);
+  const auto joint_names = franka_joint_names("fr3", options.joints);
+  if (!robot_model.init(urdf_xml, "fr3_link8", joint_names)) {
+    std::cerr << "Failed to initialize RobotModel from " << options.urdf_xml_path << "\n";
+    return 1;
   }
+  impl.setRobotModel(static_cast<void*>(&robot_model));
 
   Eigen::VectorXd tau_out = Eigen::VectorXd::Zero(options.joints);
   constexpr double dt = 0.001;
@@ -165,7 +159,7 @@ int main(int argc, char** argv) {
 
     const auto t0 = std::chrono::steady_clock::now();
     const auto t_model0 = std::chrono::steady_clock::now();
-    if (model_enabled && !robot_model.update(state.q)) {
+    if (!robot_model.update(state.q)) {
       std::cerr << "RobotModel update failed at iteration " << i << "\n";
       return 1;
     }
@@ -194,7 +188,7 @@ int main(int argc, char** argv) {
             << "  iterations: " << options.iterations << "\n"
             << "  warmup: " << options.warmup << "\n"
             << "  joints: " << options.joints << "\n"
-            << "  robot_model: " << (model_enabled ? "enabled" : "disabled") << "\n";
+            << "  robot_model: enabled\n";
   print_stats("model_update", model_update_samples_us);
   print_stats("impl_step", impl_step_samples_us);
   print_stats("total", total_samples_us);

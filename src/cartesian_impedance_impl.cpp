@@ -2,17 +2,6 @@
 #include <iostream>
 #include <cmath>
 
-namespace {
-bool allFinite(const Eigen::VectorXd& v) {
-  return v.array().isFinite().all();
-}
-
-template <typename Derived>
-bool allFiniteMat(const Eigen::MatrixBase<Derived>& m) {
-  return m.array().isFinite().all();
-}
-}  // namespace
-
 using control::ControlCommand;
 
 namespace compliant_controllers {
@@ -50,40 +39,8 @@ bool CartesianImpedanceImpl::step(const ControlCommand& command,
                                   Eigen::Ref<Eigen::VectorXd> control_output,
                                   double /*dt*/) {
 
-  if (control_output.size() != num_joints_) {
-    std::cerr << "[CartesianImpedanceImpl::step] control_output size mismatch: expected "
-              << num_joints_ << ", got " << control_output.size() << std::endl;
-    return false;
-  }
-
-  if (robot_model_ == nullptr) {
-    std::cerr << "[CartesianImpedanceImpl] robot_model_ is null, skipping step" << std::endl;
-    control_output.setZero();
-    return false;
-  }
-
-  if (current_state.q.size() != num_joints_ || current_state.dq.size() != num_joints_ ||
-      !allFinite(current_state.q) || !allFinite(current_state.dq) ||
-      !allFiniteMat(command.position) || !allFiniteMat(command.velocity) ||
-      !allFiniteMat(command.wrench) || !allFiniteMat(command.stiffness) ||
-      !allFiniteMat(command.damping)) {
-    std::cerr << "[CartesianImpedanceImpl::step] Invalid state/command input (size or non-finite)."
-              << " q_size=" << current_state.q.size()
-              << " dq_size=" << current_state.dq.size()
-              << " expected=" << num_joints_ << std::endl;
-    control_output.setZero();
-    return false;
-  }
-
-  // Wrapper already updated robot model with current_state.q; fetch Jacobian and J^+.
+  // Use the model state updated by the wrapper.
   if (!robot_model_->getJacobianAndPseudoInverse(J_, J_pinv_, 1e-6)) {
-    std::cerr << "[CartesianImpedanceImpl::step] Failed to get Jacobian/pseudo-inverse for current state." << std::endl;
-    control_output.setZero();
-    return false;
-  }
-  if (!allFiniteMat(J_) || !allFiniteMat(J_pinv_)) {
-    std::cerr << "[CartesianImpedanceImpl::step] Non-finite Jacobian/pseudo-inverse detected." << std::endl;
-    control_output.setZero();
     return false;
   }
   // robot_model_->getCoriolis(coriolis_);
@@ -118,9 +75,7 @@ bool CartesianImpedanceImpl::step(const ControlCommand& command,
     }
   }
 
-  if (control_output.size() == num_joints_) {
-    control_output.noalias() = tau_task + tau_ft_added + tau_ns; // + coriolis
-  }
+  control_output.noalias() = tau_task + tau_ft_added + tau_ns; // + coriolis
   return true;
 }
 

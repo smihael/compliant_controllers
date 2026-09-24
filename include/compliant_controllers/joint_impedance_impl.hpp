@@ -24,9 +24,6 @@ public:
                     const ParameterValue& value) override;
 
 private:
-  bool validInput(const control::ControlCommand& command,
-                  const control::ControllerState& current_state,
-                  const Eigen::Ref<const Eigen::VectorXd>& control_output) const;
   void initializeTargets(const control::ControlCommand& command);
   void filterTargets(const control::ControlCommand& command);
   void saturateTorqueRate(const Eigen::Ref<const Eigen::VectorXd>& tau_desired,

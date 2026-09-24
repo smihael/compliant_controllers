@@ -20,6 +20,16 @@ namespace compliant_controllers {
 
 namespace {
 
+bool validStepInput(const control::ControlCommand& command,
+                    const control::ControllerState& current_state,
+                    int num_joints) {
+  return current_state.q.size() == num_joints && current_state.dq.size() == num_joints &&
+         current_state.q.allFinite() && current_state.dq.allFinite() &&
+         command.position.allFinite() && command.velocity.allFinite() &&
+         command.wrench.allFinite() && command.stiffness.allFinite() &&
+         command.damping.allFinite();
+}
+
 }  // namespace
 
 CallbackReturn GenericCartesianControllerWrapper::on_init() {
@@ -221,6 +231,12 @@ CallbackReturn GenericCartesianControllerWrapper::on_activate(const rclcpp_lifec
 
   tau_out_.setZero(num_joints_);
   constexpr double controller_period = 0.001;
+  if (!validStepInput(init_cmd, state_buffer_, num_joints_)) {
+    RCLCPP_ERROR(logger_, "Invalid state/command input (size or non-finite); refusing activation.");
+    writeZeroTorques();
+    diagnostic_logger_.stop();
+    return CallbackReturn::ERROR;
+  }
   const bool init_step_ok = impl_ && impl_->step(init_cmd, state_buffer_, tau_out_, controller_period);
   if (!init_step_ok) {
     RCLCPP_ERROR(logger_,
@@ -459,6 +475,13 @@ void GenericCartesianControllerWrapper::orientation_stiffness_callback(
 controller_interface::return_type GenericCartesianControllerWrapper::update(const rclcpp::Time & /*time*/, const rclcpp::Duration & period) {
 
   readControllerState(state_buffer_);   // updates joint positions, velocities, and torques from hardware interface
+  const control::ControlCommand* latest_cmd = rt_cartesian_cmd_buffer_.readFromRT();
+  if (!latest_cmd || !validStepInput(*latest_cmd, state_buffer_, num_joints_)) {
+    RCLCPP_ERROR(logger_,
+                 "Invalid state/command input (size or non-finite); writing zero torque and returning ERROR.");
+    writeZeroTorques();
+    return controller_interface::return_type::ERROR;
+  }
   const bool model_ok = robot_model_.update(state_buffer_.q); // passes current joint positions to the robot model
   if (!model_ok) {
     RCLCPP_ERROR_THROTTLE(logger_, *get_node()->get_clock(), 1000,
@@ -472,8 +495,11 @@ controller_interface::return_type GenericCartesianControllerWrapper::update(cons
     RCLCPP_WARN_THROTTLE(logger_, *get_node()->get_clock(), 1000,
                          "RobotModel pose update failed; keeping previous EE state.");
   }
-  // read latest command from RT buffer and pass it to the implementation
-  const control::ControlCommand* latest_cmd = rt_cartesian_cmd_buffer_.readFromRT();
+  if (tau_out_.size() != num_joints_) {
+    RCLCPP_ERROR(logger_, "Control output size mismatch; writing zero torque and returning ERROR.");
+    writeZeroTorques();
+    return controller_interface::return_type::ERROR;
+  }
   // call step function of the controller implementation, returning control output torques
   const bool step_ok = impl_ && impl_->step(*latest_cmd, state_buffer_, tau_out_, period.seconds());
   if (!step_ok) {

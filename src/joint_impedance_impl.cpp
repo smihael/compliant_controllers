@@ -8,12 +8,6 @@
 
 using control::ControlCommand;
 
-namespace {
-bool all_finite(const Eigen::VectorXd& v) {
-  return v.array().isFinite().all();
-}
-}  // namespace
-
 namespace compliant_controllers {
 
 JointImpedanceImpl::JointImpedanceImpl(int num_joints) : num_joints_(num_joints) {
@@ -47,26 +41,6 @@ void JointImpedanceImpl::setParameter(
   } else if (name == "joint_impedance.max_tau_delta") {
     max_tau_delta_ = *number;
   }
-}
-
-bool JointImpedanceImpl::validInput(const ControlCommand& command,
-                                    const control::ControllerState& current_state,
-                                    const Eigen::Ref<const Eigen::VectorXd>& control_output) const {
-  return control_output.size() == num_joints_ &&
-         current_state.q.size() == num_joints_ &&
-         current_state.dq.size() == num_joints_ &&
-         command.joint_position.size() == num_joints_ &&
-         command.joint_velocity.size() == num_joints_ &&
-         command.joint_stiffness.size() == num_joints_ &&
-         command.joint_damping.size() == num_joints_ &&
-         command.joint_torque_ff.size() == num_joints_ &&
-         all_finite(current_state.q) &&
-         all_finite(current_state.dq) &&
-         all_finite(command.joint_position) &&
-         all_finite(command.joint_velocity) &&
-         all_finite(command.joint_stiffness) &&
-         all_finite(command.joint_damping) &&
-         all_finite(command.joint_torque_ff);
 }
 
 void JointImpedanceImpl::initializeTargets(const ControlCommand& command) {
@@ -113,13 +87,8 @@ bool JointImpedanceImpl::step(const ControlCommand& command,
                               const control::ControllerState& current_state,
                               Eigen::Ref<Eigen::VectorXd> control_output,
                               double /*dt*/) {
-  if (!validInput(command, current_state, control_output)) {
-    std::cerr << "[JointImpedanceImpl::step] Invalid state or command dimensions/input." << std::endl;
-    control_output.setZero();
+  if (!robot_model_->getCoriolis(current_state.dq, coriolis_)) {
     return false;
-  }
-  if (robot_model_ == nullptr || !robot_model_->getCoriolis(current_state.dq, coriolis_)) {
-    coriolis_.setZero();
   }
 
   initializeTargets(command);
