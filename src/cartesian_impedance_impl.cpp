@@ -8,6 +8,7 @@ namespace compliant_controllers {
 
 CartesianImpedanceImpl::CartesianImpedanceImpl(int num_joints) : num_joints_(num_joints) {
   J_.resize(6, num_joints_);
+  J_compliance_.resize(6, num_joints_);
   J_pinv_.resize(num_joints_, 6); 
   I_n_.resize(num_joints_, num_joints_);
   I_n_.setIdentity();
@@ -56,6 +57,30 @@ bool CartesianImpedanceImpl::step(const ControlCommand& command,
 
 
   Eigen::VectorXd tau_task = J_.transpose() * (-command.stiffness * error - command.damping * vel_error);
+  if (compliance_frame_.enabled) {
+    // RobotModel uses LOCAL_WORLD_ALIGNED: base axes, at the controlled origin.
+    // Command pose/twist have already been transformed into robot-base axes by the wrapper.
+    // Evaluate the spring at S, deriving both targets from the original E target.
+    const Eigen::Vector3d r = compliance_frame_.offset(current_state.orientation);
+    const Eigen::Vector3d r_des = compliance_frame_.offset(command.orientation);
+    error.head<3>() += r - r_des;
+    // The base-axis logarithmic angular error is invariant to a common rigid
+    // right rotation: Log(R_E R_ES (R_des R_ES)^T) = Log(R_E R_des^T).
+    J_compliance_ = J_;
+    ComplianceFrame::shiftJacobian(J_compliance_, r);
+    vel_error = J_compliance_ * current_state.dq - command.velocity;
+    vel_error.head<3>() -= command.velocity.tail<3>().cross(r_des);
+    const Eigen::Matrix<double, 6, 6> Q = compliance_frame_.axes(current_state.orientation);
+    // Gains remain unmodified in the command buffer for every input path.
+    // Rotate error/twist into S, apply gains once, rotate the wrench back to B.
+    const Eigen::Matrix<double, 6, 1> wrench = Q *
+      (-command.stiffness * (Q.transpose() * error)
+       -command.damping * (Q.transpose() * vel_error));
+    tau_task.noalias() = J_compliance_.transpose() * wrench;
+  }
+  // Feed-forward wrench retains its existing base-axis, controlled-origin
+  // semantics. J_E^T W_E is equivalent to shifting that wrench to S first.
+  // Nullspace projection below deliberately continues to use J_E and J_E^+.
   Eigen::VectorXd tau_ft_added = J_.transpose() * command.wrench;
   
 

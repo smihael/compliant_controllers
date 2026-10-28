@@ -1,6 +1,7 @@
 #pragma once
 
 #include <control/AbstractController.hpp>
+#include <compliant_controllers/compliance_frame.hpp>
 #include <Eigen/Dense>
 #include <string>
 #include <memory>
@@ -26,7 +27,12 @@ public:
   void setRobotModel(void* model_ptr) override { robot_model_ = static_cast<RobotModel*>(model_ptr); }
 
 
+  // Configuration only; the wrapper rejects this option for other implementations.
+  void configureComplianceFrame(const ComplianceFrame& frame) { compliance_frame_ = frame; }
+
 private:
+  ComplianceFrame compliance_frame_;
+  Eigen::Matrix<double, 6, Eigen::Dynamic> J_compliance_;
   // Helpers
   Eigen::Vector3d q_log(const Eigen::Quaterniond &q) const;
 

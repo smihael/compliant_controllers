@@ -80,6 +80,9 @@ def launch_runtime_actions(context, *args, **kwargs):
         parameters['gravity_compensation_enabled'] = as_bool(gravity_enabled)
     if guard_enabled != '':
         parameters['max_step_guard_enabled'] = as_bool(guard_enabled)
+    compliance_frame = LaunchConfiguration('compliance_frame').perform(context)
+    if compliance_frame:
+        parameters['compliance_frame'] = compliance_frame
     if log_file:
         parameters['log_file'] = log_file
     if plugin_params_file:
@@ -181,6 +184,7 @@ def generate_launch_description():
         DeclareLaunchArgument('impl_library', default_value=''),
         DeclareLaunchArgument('joints', default_value=''),
         DeclareLaunchArgument('ee_frame', default_value=''),
+        DeclareLaunchArgument('compliance_frame', default_value=''),
         DeclareLaunchArgument('base_frame', default_value=''),
         DeclareLaunchArgument('robot_description_node', default_value=''),
         DeclareLaunchArgument('robot_description_param', default_value=''),

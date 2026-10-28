@@ -1,4 +1,6 @@
 #include <compliant_controllers/generic_cartesian_controller_wrapper.hpp>
+#include <compliant_controllers/cartesian_impedance_impl.hpp>
+#include <compliant_controllers/resolve_compliance_frame.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -36,6 +38,7 @@ CallbackReturn GenericCartesianControllerWrapper::on_init() {
 
   logger_ = get_node()->get_logger();
   configureLogging("GenericCartesianControllerWrapper");
+  auto_declare<std::string>("compliance_frame", "");
   auto_declare<bool>("gravity_compensation_enabled", false);
   auto_declare<bool>("dithering_enabled", false);
   auto_declare<bool>("friction_compensation_enabled", false);
@@ -129,6 +132,24 @@ CallbackReturn GenericCartesianControllerWrapper::on_configure(const rclcpp_life
     RCLCPP_ERROR(logger_, "Failed to instantiate implementation: %s", load_err.c_str());
     return CallbackReturn::ERROR;
   }
+  const auto compliance_frame = get_node()->get_parameter("compliance_frame").as_string();
+  try {
+    const auto frame = resolveComplianceFrame(robot_description_loader_.urdfXml(),
+                                              robot_model_.endEffectorFrame(), compliance_frame);
+    auto* impedance = dynamic_cast<CartesianImpedanceImpl*>(impl_);
+    if (frame.enabled && !impedance) {
+      throw std::invalid_argument("compliance_frame requires CartesianImpedanceImpl");
+    }
+    if (impedance) impedance->configureComplianceFrame(frame);
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(logger_, "Failed to configure compliance_frame '%s': %s",
+                 compliance_frame.c_str(), e.what());
+    destroyImplementation();
+    return CallbackReturn::ERROR;
+  }
+  RCLCPP_INFO(logger_, "ee_frame='%s', compliance_frame='%s' (%s)",
+              robot_model_.endEffectorFrame().c_str(), compliance_frame.c_str(),
+              compliance_frame.empty() ? "legacy base-axis gains" : "rigid remote compliance point and axes");
   if (impl_) {
     impl_->setRobotModel(static_cast<void*>(&robot_model_));
     std::string plugin_params_file;
