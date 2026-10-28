@@ -65,6 +65,27 @@ ros2 control list_controllers --controller-manager /controller_manager
 ros2 control list_hardware_interfaces --controller-manager /controller_manager
 ```
 
+## Cartesian wrapper reference
+
+See [Generic Cartesian controller wrapper](docs/generic_cartesian_controller_wrapper.md)
+for all parameters, frame conventions, command topics, and launch arguments.
+The frame option is now `compliance_frame` (formerly `stiffness_frame`).
+
+Control always runs in robot-base coordinates. `cmd.header.frame_id` identifies
+the reference coordinates; `cmd.target_frame` identifies the frame whose
+desired pose is specified. For example, `header.frame_id = "base_link"` and
+`target_frame = "tool_tcp"` command the pose of `tool_tcp` relative to
+`base_link`. The wrapper transforms this target to robot-base coordinates and
+converts it to the configured `control_frame` using the tool offset from the URDF or timestamped TF.
+Desired twist and feedforward wrench include the corresponding lever-arm shifts.
+`target_frame` must be nonempty and have a transform to `control_frame`;
+externally broadcast tool frames are supported. The offset is treated as rigid;
+`compliance_frame` independently defines the spring/damper point and gain axes.
+The controller setting is now `control_frame` (formerly `ee_frame`), with
+`fr3_link8` selected by default in Franka bringup. Configure the corresponding
+control frame explicitly for other robots. Publisher scripts retain their `ee_frame`
+option for selecting the message's `target_frame`.
+
 ## Cartesian command example
 
 `test_cartesian_command.py` sends a Cartesian offset from the current end-effector
