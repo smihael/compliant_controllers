@@ -56,6 +56,10 @@ struct PayloadProperties {
 
 class PayloadCompensation {
 public:
+  void setApplied(const PayloadProperties& payload) {
+    mass_ = payload.mass;
+    first_moment_ = payload.first_moment;
+  }
   void reset() { mass_ = 0; first_moment_.setZero(); }
   Eigen::Matrix<double, 6, 1> step(const PayloadProperties& target, double alpha,
                                   const Eigen::Matrix3d& R_BE) {

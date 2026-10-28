@@ -27,6 +27,8 @@ supply it in controller YAML. ROS/controller-manager options such as
 | `max_position_command_step_m` | double, `0.01` | Maximum translation-error norm, metres. Excess replaces position target with measured position. |
 | `max_orientation_command_step_rad` | double, `pi/180` | Maximum shortest-rotation error, radians. Excess replaces orientation target with measured orientation. |
 | `gravity_compensation_enabled` | bool, `false` | Adds model gravity torque; choose according to hardware gravity compensation. |
+| `payload_compensation_enabled` | bool, `false` | Enables additional grasped-payload gravity compensation through `~/set_payload`; requires Cartesian impedance. |
+| `payload_compensation_alpha` | double, `0.01` | Per-cycle smoothing fraction in `(0,1]`; `1` applies immediately. |
 | `dithering_enabled` | bool, `false` | Adds error-biased rotational dither about robot-base Y through E's Jacobian. Compiled constants: 50 Hz, base amplitude 1.5 Nm, alpha 50, beta 0.8. |
 | `friction_compensation_enabled` | bool, `false` | Enables joint friction compensation. |
 | `friction_compensation.model` | string, `""` | Required when enabled: `sigmoid` or `hysteresis`. |
@@ -165,3 +167,123 @@ existing controller manager.
 The environment variable `CONTROLLER_DEBUG` enables wrapper debug logs whenever
 present, even with value `0`. Demo Docker entrypoints use `COMPLIANCE_FRAME` for
 the renamed frame launch argument.
+
+## Grasped payload gravity compensation
+
+For `CartesianImpedanceImpl`, configure `payload_compensation_enabled: true`
+(default `false`) and `payload_compensation_alpha: 0.01` (finite, in `(0, 1]`).
+These parameters are read on configuration, like robot gravity compensation.
+Payload calculation adds a small fixed-size wrench calculation and Jacobian
+transpose product per cycle; no TF queries or blocking locks run in the update loop.
+
+The controller-private `~/set_payload` service uses
+`compliant_controllers_msgs/srv/SetPayload`:
+
+```text
+string frame_id
+geometry_msgs/Inertia inertia
+bool apply_on_activation
+---
+bool success
+string message
+```
+
+`frame_id` specifies the coordinates of all properties and must identify a frame
+rigidly attached to the controlled end-effector E. `inertia.m` is mass in kg;
+`inertia.com` is the CoM position from that frame's origin in metres. The six tensor
+entries are the symmetric inertia **about the CoM**, expressed in that frame's
+axes, in kg·m². Zero inertia is valid for a point-mass approximation. Non-finite
+values, negative mass, non-positive-semidefinite inertia, and violations of the
+principal-moment triangle inequalities are rejected with a descriptive response.
+
+Fixed URDF tool offsets are resolved without TF. Known URDF frames separated
+from E by a movable joint are rejected. External tool frames use the latest
+available TF from the tool frame into E, without waiting. Publishers must ensure
+these external frames are rigidly attached to E; TF connectivity alone cannot
+prove rigidity. The transform is captured when the service accepts the request,
+so later TF changes require a new request. This service has no timestamp and does
+not accept base/world frames as a convention for snapshots. Missing frames or TF
+leave the previous payload target unchanged.
+
+Example (replace the controller and tool frame names):
+
+```bash
+ros2 service call /cartesian_impedance_controller/set_payload \
+  compliant_controllers_msgs/srv/SetPayload \
+  '{frame_id: tool, inertia: {m: 1.2, com: {x: 0.0, y: 0.0, z: 0.08}, ixx: 0.002, iyy: 0.002, izz: 0.001}}'
+```
+
+Each successful request replaces the target mass properties. Clear with zero mass
+and zero tensor (an empty frame is allowed):
+
+```bash
+ros2 service call /cartesian_impedance_controller/set_payload \
+  compliant_controllers_msgs/srv/SetPayload '{frame_id: "", inertia: {m: 0.0}}'
+```
+
+Mass and first moment (`mass × CoM`) are smoothed in E on each control cycle:
+`applied += alpha × (target − applied)`. Replacement and clearing continue from
+the currently applied values. `alpha=1` applies immediately; smaller values
+approach the target exponentially, so settling time depends on update frequency
+(approximately 0.3 seconds to 95% at 1 kHz with alpha 0.01). Compensation follows
+the robot's current orientation throughout the transition. Configuration clears
+all payload state; deactivate/activate retains the target and restarts the applied
+compensation from zero by default (see `apply_on_activation` below). Disabled
+controllers reject payload requests.
+
+Current model kinematics transform the payload into model-base B axes each cycle.
+For base gravity `g_B=(0,0,-9.81)` m/s², applied mass `m`, first moment `h_E`, and
+controlled-frame rotation `R_BE`, the additional compensation wrench at E is
+`[-m*g_B; -(R_BE*h_E) × g_B]`. Its joint torque is `J_Eᵀ*wrench`, independent of
+the compliance frame. The CoM in base is `p_BE + R_BE*CoM_E`; retained CoM inertia
+transforms as `I_B=R_BE*I_E*R_BEᵀ`, with no parallel-axis shift. The full target
+CoM inertia is retained in E for future dynamic compensation and is not used by
+this gravity-only feature.
+
+Payload torque is added once, separately from the existing robot gravity term,
+commanded wrench, friction, and dither, before output sanitization. Do not include
+mass already represented in URDF or hardware gravity compensation: this service
+represents only the **additional** grasped payload. The existing
+`gravity_compensation_enabled` flag continues to control robot-model gravity
+independently. Invalid pose, Jacobian, or non-finite payload torque causes the
+wrapper to write zero torque for that cycle.
+
+
+### Stop, set payload, and restart
+
+`apply_on_activation` defaults to `false`, preserving alpha-smoothed updates and
+reset-to-zero smoothing on activation. To preload full compensation on restart,
+deactivate the controller with controller manager (keep the hardware active),
+then call `set_payload` with `apply_on_activation: true`. Such requests are
+rejected while the controller is active, leaving the previous payload unchanged.
+The service validates/stores the target without writing torque while inactive.
+
+On activation, this mode captures the current pose as the new reference, seeds
+the applied mass and first moment directly from the stored target, and writes an
+initial command including full payload gravity and enabled robot-model gravity.
+The first normal update also uses full compensation, independent of alpha.
+The preload mode survives subsequent deactivate/activate cycles until another
+accepted payload request replaces it; an ordinary request restores the original
+smoothed behavior. Zero mass with the flag also supports immediate clearing on
+activation. Reconfiguration clears both the payload and the preload mode.
+
+For the Franka real stack, run each step only after the previous step succeeds:
+
+```bash
+ros2 control switch_controllers -c /fr3/controller_manager --strict \
+  --deactivate cartesian_impedance_controller
+
+ros2 service call /fr3/cartesian_impedance_controller/set_payload \
+  compliant_controllers_msgs/srv/SetPayload \
+  '{frame_id: fr3_hand_tcp, inertia: {m: 0.5, com: {z: 0.01}}, apply_on_activation: true}'
+
+ros2 control switch_controllers -c /fr3/controller_manager --strict \
+  --activate cartesian_impedance_controller
+```
+
+This uses the hardware's existing control-release behavior during the stop;
+it does not implement a software holding mode. It bypasses the controller's
+payload filter only, not hardware torque limits or hardware filtering. Changing
+the service definition requires rebuilding clients and restarting processes
+using the old service definition. Robot handover behavior requires hardware
+validation; unit tests do not establish a zero-sag hardware transition.

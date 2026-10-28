@@ -41,6 +41,8 @@ CallbackReturn GenericCartesianControllerWrapper::on_init() {
   auto_declare<std::string>("control_frame", "");
   auto_declare<std::string>("compliance_frame", "");
   auto_declare<bool>("gravity_compensation_enabled", false);
+  auto_declare<bool>("payload_compensation_enabled", false);
+  auto_declare<double>("payload_compensation_alpha", 0.01);
   auto_declare<bool>("dithering_enabled", false);
   auto_declare<bool>("friction_compensation_enabled", false);
   auto_declare<std::string>("friction_compensation.model", "");
@@ -64,6 +66,22 @@ CallbackReturn GenericCartesianControllerWrapper::on_init() {
 
 CallbackReturn GenericCartesianControllerWrapper::on_configure(const rclcpp_lifecycle::State & /*previous_state*/) {
 
+  std::lock_guard<std::mutex> payload_lock(payload_mutex_);
+  payload_configured_ = false;
+  payload_controller_active_ = false;
+  payload_apply_on_activation_ = false;
+  payload_activation_target_ = PayloadProperties{};
+  payload_target_base_ = PayloadProperties{};
+  payload_service_.reset();
+  payload_compensation_.reset();
+  rt_payload_buffer_.writeFromNonRT(PayloadProperties{});
+  get_node()->get_parameter("payload_compensation_enabled", payload_compensation_enabled_);
+  get_node()->get_parameter("payload_compensation_alpha", payload_compensation_alpha_);
+  if (!std::isfinite(payload_compensation_alpha_) || payload_compensation_alpha_ <= 0 ||
+      payload_compensation_alpha_ > 1) {
+    RCLCPP_ERROR(logger_, "payload_compensation_alpha must be finite and in (0, 1]");
+    return CallbackReturn::ERROR;
+  }
   // Cartesian command subscription (non RT -> pushes into realtime buffer)
   const auto command_qos = rclcpp::QoS(rclcpp::KeepLast(1));
 
@@ -140,9 +158,12 @@ CallbackReturn GenericCartesianControllerWrapper::on_configure(const rclcpp_life
     return CallbackReturn::ERROR;
   }
   target_frame_transforms_.clear();
+  robot_frames_.clear();
   std::vector<urdf::LinkSharedPtr> links;
   urdf_model.getLinks(links);
   for (const auto& link : links) {
+    robot_frames_.insert(link->name);
+    if (link->parent_joint) robot_frames_.insert(link->parent_joint->name);
     try {
       const auto rigid = resolveComplianceFrame(robot_description_loader_.urdfXml(),
                                                 robot_model_.endEffectorFrame(), link->name);
@@ -203,6 +224,19 @@ CallbackReturn GenericCartesianControllerWrapper::on_configure(const rclcpp_life
     }
   }
   RCLCPP_INFO(logger_, "Instantiated control implementation library (initialization deferred): %s", impl_library_.c_str());
+  if (payload_compensation_enabled_ && !dynamic_cast<CartesianImpedanceImpl*>(impl_)) {
+    RCLCPP_ERROR(logger_, "Payload compensation requires CartesianImpedanceImpl");
+    destroyImplementation();
+    return CallbackReturn::ERROR;
+  }
+  payload_jacobian_.setZero(6, num_joints_);
+  payload_torque_.setZero(num_joints_);
+  payload_configured_ = true;
+  if (dynamic_cast<CartesianImpedanceImpl*>(impl_)) {
+    payload_service_ = get_node()->create_service<compliant_controllers_msgs::srv::SetPayload>(
+      "~/set_payload", std::bind(&GenericCartesianControllerWrapper::setPayload, this,
+                                std::placeholders::_1, std::placeholders::_2));
+  }
   logConfigurationSummary();
 
   return CallbackReturn::SUCCESS;
@@ -256,14 +290,18 @@ void GenericCartesianControllerWrapper::logActivationSummary() {
 }
 
 CallbackReturn GenericCartesianControllerWrapper::on_activate(const rclcpp_lifecycle::State & /*previous_state*/) {
+  std::lock_guard<std::mutex> payload_lock(payload_mutex_);
+  payload_controller_active_ = false;
   state_buffer_ = control::ControllerState(num_joints_);
   readControllerState(state_buffer_);
-  robot_model_.update(state_buffer_.q);
+  const bool activation_model_ok = robot_model_.update(state_buffer_.q);
   const bool pose_ok = robot_model_.getPose(state_buffer_.position, state_buffer_.orientation);
   if (!pose_ok) {
     RCLCPP_WARN_THROTTLE(logger_, *get_node()->get_clock(), 1000,
                          "RobotModel pose update failed; keeping previous EE state.");
   }
+  payload_compensation_.reset();
+  if (payload_apply_on_activation_) payload_compensation_.setApplied(payload_activation_target_);
   active_since_ = get_node()->get_clock()->now();
   error_biased_dither_.reset();
   diagnostic_logger_.start();
@@ -307,6 +345,26 @@ CallbackReturn GenericCartesianControllerWrapper::on_activate(const rclcpp_lifec
     return CallbackReturn::ERROR;
   }
 
+  if (payload_compensation_enabled_ && payload_apply_on_activation_) {
+    // Seed the claimed effort interfaces before the first hardware write.
+    // The inactive service request bypasses only the payload alpha filter.
+    bool compensation_ok = activation_model_ok;
+    if (robot_gravity_compensation_enabled_) {
+      Eigen::VectorXd gravity = Eigen::VectorXd::Zero(num_joints_);
+      compensation_ok = compensation_ok && robot_model_.getGravity(gravity) && gravity.allFinite();
+      if (compensation_ok) tau_out_ += gravity;
+    }
+    compensation_ok = compensation_ok && addPayloadCompensation(pose_ok);
+    if (!compensation_ok) {
+      RCLCPP_ERROR(logger_, "Cannot initialize full payload compensation; refusing activation.");
+      writeZeroTorques();
+      diagnostic_logger_.stop();
+      return CallbackReturn::ERROR;
+    }
+    sanitizeTorqueOutput();
+    writeTorqueOutput();
+  }
+  payload_controller_active_ = true;
   logActivationSummary();
   RCLCPP_DEBUG_STREAM(logger_, "Initial q: " << state_buffer_.q.transpose() << " | tau: " << state_buffer_.tau.transpose() << " | ee: [" << state_buffer_.position.transpose() << "]");
   
@@ -314,8 +372,10 @@ CallbackReturn GenericCartesianControllerWrapper::on_activate(const rclcpp_lifec
 }
 
 CallbackReturn GenericCartesianControllerWrapper::on_deactivate(const rclcpp_lifecycle::State & /*previous_state*/) {
+  std::lock_guard<std::mutex> payload_lock(payload_mutex_);
   diagnostic_logger_.stop();
   for (auto & ci : command_interfaces_) { ci.set_value(0.0); }
+  payload_controller_active_ = false;
   return CallbackReturn::SUCCESS;
 }
 
@@ -656,6 +716,12 @@ controller_interface::return_type GenericCartesianControllerWrapper::update(cons
     if (robot_gravity_compensation_enabled_ && gravity_ok) {
       tau_out_ += gravity;
     }
+  }
+  if (!addPayloadCompensation(pose_ok)) {
+    RCLCPP_ERROR_THROTTLE(logger_, *get_node()->get_clock(), 1000,
+                         "Invalid payload compensation; writing zero torque.");
+    writeZeroTorques();
+    return controller_interface::return_type::OK;
   }
   addFrictionCompensation(period.seconds());
   addErrorBiasedDither(*latest_cmd, period.seconds());

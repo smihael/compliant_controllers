@@ -10,6 +10,10 @@ void GenericCartesianControllerWrapper::setPayload(
     response->message = "Payload compensation is not configured and enabled";
     return;
   }
+  if (request->apply_on_activation && payload_controller_active_) {
+    response->message = "apply_on_activation requires an inactive controller; deactivate through controller_manager first";
+    return;
+  }
   try {
     // Validate before TF lookup; zero mass is a frame-independent clear operation.
     PayloadProperties::fromMessage(request->inertia, Eigen::Isometry3d::Identity());
@@ -35,8 +39,11 @@ void GenericCartesianControllerWrapper::setPayload(
     }
     const auto target = PayloadProperties::fromMessage(request->inertia, T_EF);
     rt_payload_buffer_.writeFromNonRT(target);
+    payload_activation_target_ = target;
+    payload_apply_on_activation_ = request->apply_on_activation;
     response->success = true;
-    response->message = target.mass == 0 ? "Payload clearing accepted" : "Payload replacement accepted";
+    response->message = request->apply_on_activation ? "Payload accepted for full compensation on activation" :
+      (target.mass == 0 ? "Payload clearing accepted" : "Payload replacement accepted");
   } catch (const std::exception& error) {
     response->message = error.what();
   }

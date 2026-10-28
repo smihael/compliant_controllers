@@ -27,6 +27,7 @@ find_package(rclcpp_lifecycle REQUIRED)
 find_package(realtime_tools REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(franka_msgs REQUIRED)
 find_package(compliant_controllers_msgs REQUIRED)
@@ -106,6 +107,7 @@ if(COMPLIANT_CONTROLLERS_BUILD_TIMING_TESTS)
 endif()
 
 add_library(${PROJECT_NAME} SHARED
+  src/payload_compensation.cpp
   src/async_diagnostic_logger.cpp
   src/cartesian_error_biased_dither.cpp
   src/friction_compensation.cpp
@@ -130,6 +132,7 @@ ament_target_dependencies(${PROJECT_NAME}
   realtime_tools
   std_srvs
   std_msgs
+  geometry_msgs
   sensor_msgs
   franka_msgs
   compliant_controllers_msgs
@@ -185,6 +188,6 @@ install(DIRECTORY launch/
 
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME} cartesian_impedance_impl joint_impedance_impl)
-ament_export_dependencies(controller_interface pluginlib rclcpp rclcpp_lifecycle hardware_interface std_msgs sensor_msgs franka_msgs pinocchio ament_index_cpp ros2_control_robot_dynamics urdf tf2_ros)
+ament_export_dependencies(controller_interface pluginlib rclcpp rclcpp_lifecycle hardware_interface geometry_msgs std_msgs sensor_msgs franka_msgs pinocchio ament_index_cpp ros2_control_robot_dynamics urdf tf2_ros)
 
 ament_package()

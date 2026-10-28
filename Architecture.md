@@ -251,3 +251,10 @@ The optional `COMPLIANT_CONTROLLERS_BUILD_TIMING_TESTS` CMake option builds stan
 - `cartesian_update_timing_test`
 
 These tests measure implementation and model-update timing without communication. They can be used to assess whether the update step provides sufficient computational headroom for the desired control-loop frequency.
+
+
+## Payload compensation
+
+
+Payload gravity compensation is available through `~/set_payload`; see the
+[frame conventions, service examples, and smoothing parameters](docs/generic_cartesian_controller_wrapper.md#grasped-payload-gravity-compensation).

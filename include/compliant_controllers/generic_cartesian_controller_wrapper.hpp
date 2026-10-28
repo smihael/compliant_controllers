@@ -1,5 +1,8 @@
 #pragma once
 
+#include <set>
+#include <compliant_controllers/payload_compensation.hpp>
+#include <compliant_controllers_msgs/srv/set_payload.hpp>
 #include <array>
 #include <mutex>
 #include <map>
@@ -35,7 +38,26 @@ public:
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State & previous_state) override;
 
 private:
-  // TF is used only by the non-real-time command callback.
+  bool payload_compensation_enabled_{false};
+  double payload_compensation_alpha_{0.01};
+  PayloadCompensation payload_compensation_;
+  PayloadProperties payload_target_base_;  // Retained full target properties for future dynamics.
+  realtime_tools::RealtimeBuffer<PayloadProperties> rt_payload_buffer_;
+  std::mutex payload_mutex_;
+  bool payload_configured_{false};
+  // Service/lifecycle state is serialized by payload_mutex_; update never locks it.
+  bool payload_controller_active_{false};
+  bool payload_apply_on_activation_{false};
+  PayloadProperties payload_activation_target_;
+  std::set<std::string> robot_frames_;
+  Eigen::Matrix<double, 6, Eigen::Dynamic> payload_jacobian_;
+  Eigen::VectorXd payload_torque_;
+  rclcpp::Service<compliant_controllers_msgs::srv::SetPayload>::SharedPtr payload_service_;
+  void setPayload(const std::shared_ptr<compliant_controllers_msgs::srv::SetPayload::Request> request,
+                  std::shared_ptr<compliant_controllers_msgs::srv::SetPayload::Response> response);
+  bool addPayloadCompensation(bool pose_ok);
+
+  // TF is used only by non-real-time command and payload callbacks.
   std::string robot_base_frame_;
   // Rigid transforms from message controlled frames C to configured end-effector frame E.
   // URDF offsets are cached at configure time; external tool offsets use TF
