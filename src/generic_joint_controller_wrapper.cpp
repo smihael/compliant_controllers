@@ -50,6 +50,7 @@ CallbackReturn GenericJointControllerWrapper::on_init() {
 
   logger_ = get_node()->get_logger();
   configureLogging("GenericJointControllerWrapper");
+  auto_declare<std::string>("control_frame", "");
   auto_declare<bool>("friction_compensation_enabled", false);
   auto_declare<std::string>("friction_compensation.model", "");
   auto_declare<double>("friction_compensation.scale", 1.0);
@@ -105,12 +106,12 @@ CallbackReturn GenericJointControllerWrapper::on_configure(const rclcpp_lifecycl
 
   impl_library_ = get_node()->get_parameter("impl_library").as_string();
 
-  std::string ee_frame_hint;
-  get_node()->get_parameter("ee_frame", ee_frame_hint);
+  std::string control_frame_hint;
+  get_node()->get_parameter("control_frame", control_frame_hint);
   if (!robot_description_loader_.load(get_node())) {
     return CallbackReturn::ERROR;
   }
-  if (!robot_model_.init(robot_description_loader_.urdfXml(), ee_frame_hint, joint_names_)) {
+  if (!robot_model_.init(robot_description_loader_.urdfXml(), control_frame_hint, joint_names_)) {
     RCLCPP_ERROR(get_node()->get_logger(), "Failed to initialize RobotModel with provided URDF");
     return CallbackReturn::ERROR;
   }

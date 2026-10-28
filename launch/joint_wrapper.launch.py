@@ -52,6 +52,9 @@ def launch_runtime_actions(context, *args, **kwargs):
         LaunchConfiguration('robot_profile_file').perform(context),
         LaunchConfiguration('friction_compensation_profile').perform(context))
     parameters.pop('dithering_enabled', None)
+    control_frame = LaunchConfiguration('control_frame').perform(context)
+    if control_frame:
+        parameters['control_frame'] = control_frame
     friction_enabled = LaunchConfiguration('friction_compensation_enabled').perform(context)
     if friction_enabled != '':
         parameters['friction_compensation_enabled'] = as_bool(friction_enabled)
@@ -109,7 +112,7 @@ def generate_launch_description():
         DeclareLaunchArgument('controller_manager_timeout', default_value='30'),
         DeclareLaunchArgument('impl_library', default_value='libjoint_impedance_impl.so'),
         DeclareLaunchArgument('joints', default_value=''),
-        DeclareLaunchArgument('ee_frame', default_value=''),
+        DeclareLaunchArgument('control_frame', default_value=''),
         DeclareLaunchArgument('robot_description_node', default_value='robot_state_publisher'),
         DeclareLaunchArgument('robot_description_param', default_value='robot_description'),
         DeclareLaunchArgument('friction_compensation_enabled', default_value=''),

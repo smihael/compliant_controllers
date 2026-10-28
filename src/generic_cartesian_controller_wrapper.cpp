@@ -38,6 +38,7 @@ CallbackReturn GenericCartesianControllerWrapper::on_init() {
 
   logger_ = get_node()->get_logger();
   configureLogging("GenericCartesianControllerWrapper");
+  auto_declare<std::string>("control_frame", "");
   auto_declare<std::string>("compliance_frame", "");
   auto_declare<bool>("gravity_compensation_enabled", false);
   auto_declare<bool>("dithering_enabled", false);
@@ -108,16 +109,53 @@ CallbackReturn GenericCartesianControllerWrapper::on_configure(const rclcpp_life
 
   impl_library_ = get_node()->get_parameter("impl_library").as_string();
 
-  std::string ee_frame_hint = get_node()->get_parameter("ee_frame").as_string();
+  std::string control_frame_hint = get_node()->get_parameter("control_frame").as_string();
   if (!robot_description_loader_.load(get_node())) {
     return CallbackReturn::ERROR;
   }
 
+  // RobotModel builds a fixed-base model whose coordinates are the URDF root.
+  urdf::Model urdf_model;
+  if (!urdf_model.initString(robot_description_loader_.urdfXml()) || !urdf_model.getRoot()) {
+    RCLCPP_ERROR(logger_, "Cannot determine robot-base frame from URDF");
+    return CallbackReturn::ERROR;
+  }
+  if (control_frame_hint.empty() ||
+      (!urdf_model.getLink(control_frame_hint) && !urdf_model.getJoint(control_frame_hint))) {
+    RCLCPP_ERROR(logger_, "control_frame must name a robot control frame in the URDF "
+                         "(for example fr3_link8 for Franka FR3).");
+    return CallbackReturn::ERROR;
+  }
+  robot_base_frame_ = urdf_model.getRoot()->name;
+  command_tf_listener_.reset();
+  command_tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_node()->get_clock());
+  command_tf_listener_ = std::make_unique<tf2_ros::TransformListener>(
+      *command_tf_buffer_, get_node(), true);
+  RCLCPP_INFO(logger_, "Cartesian command coordinates will be transformed into robot base '%s'",
+              robot_base_frame_.c_str());
+
   // Initialize robot model owned by wrapper
-  if(!robot_model_.init(robot_description_loader_.urdfXml(), ee_frame_hint, joint_names_)) {
+  if(!robot_model_.init(robot_description_loader_.urdfXml(), control_frame_hint, joint_names_)) {
     RCLCPP_ERROR(logger_, "Failed to initialize RobotModel with provided URDF");
     return CallbackReturn::ERROR;
   }
+  target_frame_transforms_.clear();
+  std::vector<urdf::LinkSharedPtr> links;
+  urdf_model.getLinks(links);
+  for (const auto& link : links) {
+    try {
+      const auto rigid = resolveComplianceFrame(robot_description_loader_.urdfXml(),
+                                                robot_model_.endEffectorFrame(), link->name);
+      target_frame_transforms_.emplace(link->name, rigid.T_ES);
+      if (link->parent_joint) {
+        target_frame_transforms_.emplace(link->parent_joint->name, rigid.T_ES);
+      }
+    } catch (const std::invalid_argument&) {
+      // Other robot links cannot be commanded through this frame's Jacobian.
+    }
+  }
+  target_frame_transforms_[robot_model_.endEffectorFrame()] = Eigen::Isometry3d::Identity();
+
   if (!joint_limit_repulsion_.configure(
         get_node(), robot_description_loader_.urdfXml(), joint_names_)) {
     return CallbackReturn::ERROR;
@@ -140,6 +178,7 @@ CallbackReturn GenericCartesianControllerWrapper::on_configure(const rclcpp_life
     if (frame.enabled && !impedance) {
       throw std::invalid_argument("compliance_frame requires CartesianImpedanceImpl");
     }
+    compliance_frame_enabled_ = frame.enabled;
     if (impedance) impedance->configureComplianceFrame(frame);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(logger_, "Failed to configure compliance_frame '%s': %s",
@@ -147,7 +186,7 @@ CallbackReturn GenericCartesianControllerWrapper::on_configure(const rclcpp_life
     destroyImplementation();
     return CallbackReturn::ERROR;
   }
-  RCLCPP_INFO(logger_, "ee_frame='%s', compliance_frame='%s' (%s)",
+  RCLCPP_INFO(logger_, "control_frame='%s', compliance_frame='%s' (%s)",
               robot_model_.endEffectorFrame().c_str(), compliance_frame.c_str(),
               compliance_frame.empty() ? "legacy base-axis gains" : "rigid remote compliance point and axes");
   if (impl_) {
@@ -172,7 +211,7 @@ CallbackReturn GenericCartesianControllerWrapper::on_configure(const rclcpp_life
 void GenericCartesianControllerWrapper::logConfigurationSummary() {
 
   RCLCPP_INFO(logger_,
-              "Wrapper configured: arm_id='%s', joints=%d, ee_frame='%s', urdf='%s', impl='%s'",
+              "Wrapper configured: arm_id='%s', joints=%d, control_frame='%s', urdf='%s', impl='%s'",
               arm_id_.c_str(), num_joints_,
               robot_model_.endEffectorFrame().c_str(),
               robot_description_loader_.sourceDescription().c_str(),
@@ -304,24 +343,57 @@ void GenericCartesianControllerWrapper::cartesian_command_callback(const complia
     return;
   }
 
-  const auto expected_frame = robot_model_.endEffectorFrame();
-  if (!expected_frame.empty()) {
-    auto normalize_frame = [](std::string frame) {
-      while (!frame.empty() && frame.front() == '/') {
-        frame.erase(frame.begin());
-      }
-      return frame;
-    };
-    const auto message_frame = normalize_frame(msg->header.frame_id);
-    const auto expected = normalize_frame(expected_frame);
-    if (message_frame.empty()) {
+  auto source_frame = msg->header.frame_id;
+  while (!source_frame.empty() && source_frame.front() == '/') source_frame.erase(0, 1);
+  if (source_frame.empty()) {
+    RCLCPP_WARN_THROTTLE(logger_, *get_node()->get_clock(), 2000,
+                         "Dropping CartesianCommand with empty coordinate frame_id.");
+    return;
+  }
+  auto target_frame = msg->target_frame;
+  while (!target_frame.empty() && target_frame.front() == '/') target_frame.erase(0, 1);
+  if (target_frame.empty()) {
+    RCLCPP_WARN_THROTTLE(logger_, *get_node()->get_clock(), 2000,
+                         "Dropping CartesianCommand with empty target_frame.");
+    return;
+  }
+  Eigen::Isometry3d T_EC = Eigen::Isometry3d::Identity();
+  const auto controlled = target_frame_transforms_.find(target_frame);
+  if (controlled != target_frame_transforms_.end()) {
+    T_EC = controlled->second;
+  } else {
+    try {
+      // Externally broadcast tools need not be present in the URDF. Resolve at
+      // the command timestamp on every command; do not cache a TF snapshot.
+      const auto tf = command_tf_buffer_->lookupTransform(
+          robot_model_.endEffectorFrame(), target_frame, msg_stamp);
+      const auto& t = tf.transform.translation;
+      const auto& q = tf.transform.rotation;
+      T_EC.translation() << t.x, t.y, t.z;
+      T_EC.linear() = Eigen::Quaterniond(q.w, q.x, q.y, q.z).normalized().toRotationMatrix();
+    } catch (const tf2::TransformException& e) {
       RCLCPP_WARN_THROTTLE(logger_, *get_node()->get_clock(), 2000,
-                           "CartesianCommand header.frame_id is empty; expected controlled frame '%s'.",
-                           expected_frame.c_str());
-    } else if (message_frame != expected) {
+                           "Dropping CartesianCommand: cannot transform target_frame '%s' "
+                           "to control_frame '%s': %s", target_frame.c_str(),
+                           robot_model_.endEffectorFrame().c_str(), e.what());
+      return;
+    }
+  }
+
+  Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
+  Eigen::Vector3d translation = Eigen::Vector3d::Zero();
+  if (source_frame != robot_base_frame_) {
+    try {
+      // Exact command timestamp, zero wait. Never perform TF lookup in update().
+      const auto tf = command_tf_buffer_->lookupTransform(robot_base_frame_, source_frame, msg_stamp);
+      const auto& t = tf.transform.translation;
+      const auto& q = tf.transform.rotation;
+      translation << t.x, t.y, t.z;
+      R = Eigen::Quaterniond(q.w, q.x, q.y, q.z).normalized().toRotationMatrix();
+    } catch (const tf2::TransformException& e) {
       RCLCPP_WARN_THROTTLE(logger_, *get_node()->get_clock(), 2000,
-                           "Dropping CartesianCommand for frame '%s'; controller frame is '%s'.",
-                           msg->header.frame_id.c_str(), expected_frame.c_str());
+                           "Dropping CartesianCommand: cannot transform '%s' to '%s': %s",
+                           source_frame.c_str(), robot_base_frame_.c_str(), e.what());
       return;
     }
   }
@@ -332,6 +404,14 @@ void GenericCartesianControllerWrapper::cartesian_command_callback(const complia
 
   cmd.orientation = Eigen::Quaterniond(msg->pose.orientation.w, msg->pose.orientation.x,
                                        msg->pose.orientation.y, msg->pose.orientation.z).normalized();
+
+  cmd.position = R * cmd.position + translation;
+  cmd.orientation = Eigen::Quaterniond(R) * cmd.orientation;
+
+  // The message targets C. The implementation consumes a target for modeled E:
+  // T_BE_des = T_BC_des * inverse(T_EC).
+  cmd.orientation = (cmd.orientation * Eigen::Quaterniond(T_EC.linear()).conjugate()).normalized();
+  cmd.position -= cmd.orientation * T_EC.translation();
 
   const double position_step = (cmd.position - state_buffer_.position).norm();
   const double orientation_dot = std::clamp(
@@ -383,6 +463,31 @@ void GenericCartesianControllerWrapper::cartesian_command_callback(const complia
     cmd.damping.bottomRightCorner(3, 3) = Do;
   }
 
+  // First re-express vectors at C in B axes, then shift their application point
+  // to E. Desired twist uses the desired lever; applied wrench uses the measured
+  // lever so that J_E^T W_E equals J_C^T W_C (virtual work).
+  cmd.velocity.head<3>() = (R * cmd.velocity.head<3>()).eval();
+  cmd.velocity.tail<3>() = (R * cmd.velocity.tail<3>()).eval();
+  cmd.wrench.head<3>() = (R * cmd.wrench.head<3>()).eval();
+  cmd.wrench.tail<3>() = (R * cmd.wrench.tail<3>()).eval();
+  const Eigen::Vector3d desired_lever = cmd.orientation * T_EC.translation();
+  const Eigen::Vector3d measured_lever = state_buffer_.orientation * T_EC.translation();
+  cmd.velocity.head<3>() -= cmd.velocity.tail<3>().cross(desired_lever);
+  cmd.wrench.tail<3>() += measured_lever.cross(cmd.wrench.head<3>());
+  // Gain point/axes are configured independently by compliance_frame; selecting
+  // a message target_frame changes the target and feedforward point only.
+  if (!compliance_frame_enabled_) {
+    // Explicit compliance-frame gains already have their own configured axes.
+    cmd.stiffness.topLeftCorner<3, 3>() =
+        (R * cmd.stiffness.topLeftCorner<3, 3>() * R.transpose()).eval();
+    cmd.stiffness.bottomRightCorner<3, 3>() =
+        (R * cmd.stiffness.bottomRightCorner<3, 3>() * R.transpose()).eval();
+    cmd.damping.topLeftCorner<3, 3>() =
+        (R * cmd.damping.topLeftCorner<3, 3>() * R.transpose()).eval();
+    cmd.damping.bottomRightCorner<3, 3>() =
+        (R * cmd.damping.bottomRightCorner<3, 3>() * R.transpose()).eval();
+  }
+
   // Nullspace & torque feedforward
   const auto n_qd = msg->nullspace_position.size();
   const auto n_k = msg->nullspace_stiffness.size();
@@ -402,6 +507,10 @@ void GenericCartesianControllerWrapper::cartesian_command_callback(const complia
   // print all cmd fields
   std::ostringstream oss;
   oss << "Received CartesianCommand:\n";
+  oss << "  reference_frame: " << source_frame << "\n";
+  oss << "  target_frame: " << target_frame << "\n";
+  oss << "  converted_to: " << robot_model_.endEffectorFrame()
+      << " in " << robot_base_frame_ << " coordinates\n";
   oss << "  position: [" << cmd.position.x() << ", " << cmd.position.y() << ", " << cmd.position.z() << "]\n";
   oss << "  orientation: [" << cmd.orientation.w() << ", " << cmd.orientation.x() << ", " << cmd.orientation.y() << ", " << cmd.orientation.z() << "]\n";
   oss << "  velocity: " << cmd.velocity.transpose() << "\n";

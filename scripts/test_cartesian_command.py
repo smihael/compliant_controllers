@@ -59,7 +59,7 @@ class TestCartesianCommand(Node):
         self.get_logger().info('Waiting for transform to end-effector...')
 
     def query_controller_ee_frame(self):
-        """Query the ee_frame parameter from the controller node."""
+        """Use the controller control_frame as the default target frame."""
         controller_name = self.get_parameter('controller_name').get_parameter_value().string_value
         # Build service name relative to namespace to support namespaced deployments
         # Using relative names ensures the node's namespace (or remapped namespace) is respected
@@ -73,7 +73,7 @@ class TestCartesianCommand(Node):
             return
         
         request = GetParameters.Request()
-        request.names = ['ee_frame']
+        request.names = ['control_frame']
         
         future = client.call_async(request)
         rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
@@ -81,7 +81,7 @@ class TestCartesianCommand(Node):
         if future.result() is not None and len(future.result().values) > 0:
             ee_frame = future.result().values[0].string_value
             self.set_parameters([rclpy.parameter.Parameter('ee_frame', rclpy.Parameter.Type.STRING, ee_frame)])
-            self.get_logger().info(f'Using ee_frame from controller: {ee_frame}')
+            self.get_logger().info(f'Using controller control_frame as default target_frame: {ee_frame}')
         else:
             self.get_logger().warn('Could not get ee_frame from controller, using default based on robot_name')
             robot_name = self.get_parameter('robot_name').get_parameter_value().string_value
@@ -127,7 +127,8 @@ class TestCartesianCommand(Node):
 
         cmd = CartesianCommand()
         cmd.header.stamp = self.get_clock().now().to_msg()
-        cmd.header.frame_id = ee
+        cmd.header.frame_id = base
+        cmd.target_frame = ee
         # Current pose target with offsets
         cmd.pose.position.x = tf.transform.translation.x + dx
         cmd.pose.position.y = tf.transform.translation.y + dy

@@ -2,12 +2,15 @@
 
 #include <array>
 #include <mutex>
+#include <map>
 #include <numbers>
 #include <string>
 #include <Eigen/Eigen>
 #include <controller_interface/controller_interface.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <realtime_tools/realtime_buffer.hpp>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
@@ -32,6 +35,15 @@ public:
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State & previous_state) override;
 
 private:
+  // TF is used only by the non-real-time command callback.
+  std::string robot_base_frame_;
+  // Rigid transforms from message controlled frames C to configured end-effector frame E.
+  // URDF offsets are cached at configure time; external tool offsets use TF
+  // at the command timestamp in the non-real-time callback.
+  std::map<std::string, Eigen::Isometry3d> target_frame_transforms_;
+  bool compliance_frame_enabled_{false};
+  std::unique_ptr<tf2_ros::Buffer> command_tf_buffer_;
+  std::unique_ptr<tf2_ros::TransformListener> command_tf_listener_;
   double init_k_pos_{};
   double init_k_ori_{};
   bool max_step_guard_enabled_{true};

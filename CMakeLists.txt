@@ -35,6 +35,7 @@ find_package(pinocchio REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(ros2_control_robot_dynamics REQUIRED)
 find_package(urdf REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 add_library(cartesian_impedance_impl SHARED
   src/cartesian_impedance_impl.cpp
@@ -136,6 +137,7 @@ ament_target_dependencies(${PROJECT_NAME}
   ament_index_cpp
   ros2_control_robot_dynamics
   urdf
+  tf2_ros
 )
 
 # Standalone implementation library exposing factory symbols for dynamic loading
@@ -183,6 +185,6 @@ install(DIRECTORY launch/
 
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME} cartesian_impedance_impl joint_impedance_impl)
-ament_export_dependencies(controller_interface pluginlib rclcpp rclcpp_lifecycle hardware_interface std_msgs sensor_msgs franka_msgs pinocchio ament_index_cpp ros2_control_robot_dynamics urdf)
+ament_export_dependencies(controller_interface pluginlib rclcpp rclcpp_lifecycle hardware_interface std_msgs sensor_msgs franka_msgs pinocchio ament_index_cpp ros2_control_robot_dynamics urdf tf2_ros)
 
 ament_package()

@@ -26,8 +26,6 @@ public:
 
   void setRobotModel(void* model_ptr) override { robot_model_ = static_cast<RobotModel*>(model_ptr); }
 
-
-  // Configuration only; the wrapper rejects this option for other implementations.
   void configureComplianceFrame(const ComplianceFrame& frame) { compliance_frame_ = frame; }
 
 private:

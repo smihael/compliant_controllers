@@ -53,6 +53,6 @@ inline ComplianceFrame resolveComplianceFrame(
       return result;
     }
   }
-  throw std::invalid_argument("compliance_frame '" + frame + "' is not rigidly attached to ee_frame '" + ee + "'");
+  throw std::invalid_argument("compliance_frame '" + frame + "' is not rigidly attached to control_frame '" + ee + "'");
 }
 }  // namespace compliant_controllers
